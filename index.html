@@ -141,6 +141,8 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .summary-row-left .dot{width:10px;height:10px;border-radius:50%;flex:none}
 .price-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--cream)}
 .price-row:last-child{border-bottom:none}
+.request-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 0;border-bottom:1px solid var(--cream);flex-wrap:wrap}
+.request-row:last-child{border-bottom:none}
 </style>
 </head>
 <body>
@@ -164,13 +166,43 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
     </div>
 
     <p class="login-note" id="staffToggleNote">
+      New chef? <button class="btn-ghost" style="padding:6px 12px;font-size:12px" onclick="showRequestForm()">Request access</button><br><br>
       Staff? <button class="btn-ghost" style="padding:6px 12px;font-size:12px" onclick="showStaffLogin()">Sign in with password</button>
     </p>
+
+    <div id="requestFormWrap" class="hidden" style="margin-top:18px;text-align:left">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:6px">Tell us a bit about your business and we'll set you up — usually within a day.</p>
+      <label for="req_business">Business name</label>
+      <input id="req_business" placeholder="The Pines Restaurant">
+      <label for="req_contact">Your name</label>
+      <input id="req_contact" placeholder="Jamie">
+      <label for="req_email">Email</label>
+      <input id="req_email" type="email" placeholder="jamie@thepines.com.au">
+      <label for="req_phone">Phone (optional)</label>
+      <input id="req_phone">
+      <button class="btn btn-primary" onclick="doRequestAccess()">Request access</button>
+      <div class="login-err" id="req_err"></div>
+      <div class="magic-sent" id="reqSent">Thanks! Check your email for a sign-in link — once you click it we'll let Adam &amp; Em know you're waiting, and you'll be ready to order as soon as they confirm.</div>
+    </div>
+
     <div id="staffLoginWrap" class="hidden" style="margin-top:18px;text-align:left">
       <label for="staff_pw">Password</label>
       <input id="staff_pw" type="password" autocomplete="current-password">
       <button class="btn btn-primary" onclick="doStaffLogin()">Sign in</button>
     </div>
+  </div>
+</div>
+
+<div id="pendingScreen" class="hidden">
+  <div class="login-card" style="max-width:420px">
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="32" cy="32" r="30" stroke="#4A2017" stroke-width="3"/>
+      <path d="M18 30c0-9 7-15 14-15s14 6 14 15c-3-2-9-3-14-3s-11 1-14 3z" fill="#4A2017"/>
+      <path d="M27 30c0 8 1 16 5 22 4-6 5-14 5-22" stroke="#4A2017" stroke-width="3" stroke-linecap="round"/>
+    </svg>
+    <h1>You're on the list</h1>
+    <p class="tag" id="pendingMsg">Thanks for requesting access — Adam &amp; Em will see your details next time they check the app, and you'll be ready to order as soon as they confirm. Just come back and sign in again after that.</p>
+    <button class="btn btn-ghost" style="margin-top:10px" onclick="doSignOut()">Sign out</button>
   </div>
 </div>
 
@@ -221,7 +253,40 @@ let currentTab="board";   // routing within either chef or staff view
 /* ================= AUTH ================= */
 function showStaffLogin(){
   $("staffLoginWrap").classList.remove("hidden");
+  $("requestFormWrap").classList.add("hidden");
+  $("loginFormWrap").classList.add("hidden");
   $("staffToggleNote").classList.add("hidden");
+}
+
+function showRequestForm(){
+  $("requestFormWrap").classList.remove("hidden");
+  $("loginFormWrap").classList.add("hidden");
+  $("staffLoginWrap").classList.add("hidden");
+  $("staffToggleNote").classList.add("hidden");
+}
+
+// Holds the request details in memory between "Request access" submit and
+// the magic-link sign-in completing — we write the mn_chef_requests row
+// right after they authenticate (see resolveIdentity), since RLS requires
+// auth.uid() to exist before the insert is allowed.
+let pendingRequestDetails=null;
+
+async function doRequestAccess(){
+  const business_name=$("req_business").value.trim();
+  const email=$("req_email").value.trim();
+  const err=$("req_err");
+  if(!business_name||!email){ err.textContent="Business name and email are required."; return; }
+  err.textContent="";
+  pendingRequestDetails = {
+    business_name,
+    contact_name: $("req_contact").value.trim()||null,
+    email,
+    phone: $("req_phone").value.trim()||null,
+  };
+  try{ sessionStorage.setItem("mn_pending_request", JSON.stringify(pendingRequestDetails)); }catch(e){}
+  const {error}=await db.auth.signInWithOtp({ email, options:{ emailRedirectTo: location.origin+location.pathname } });
+  if(error){ err.textContent=error.message; return; }
+  $("reqSent").style.display="block";
 }
 
 async function doMagicLink(){
@@ -246,38 +311,82 @@ async function doStaffLogin(){
 
 async function doSignOut(){
   await db.auth.signOut();
-  currentUser=null; myChefRow=null; isStaff=false;
+  currentUser=null; myChefRow=null; isStaff=false; identityStatus="unknown";
 }
 
 function showLoginScreen(){
   $("loginScreen").classList.remove("hidden");
+  $("pendingScreen").classList.add("hidden");
   $("app").classList.add("hidden");
 }
 function showApp(){
   $("loginScreen").classList.add("hidden");
+  $("pendingScreen").classList.add("hidden");
   $("app").classList.remove("hidden");
 }
+function showPendingScreen(){
+  $("loginScreen").classList.add("hidden");
+  $("pendingScreen").classList.remove("hidden");
+  $("app").classList.add("hidden");
+}
+
+let identityStatus="unknown"; // 'staff' | 'chef' | 'pending'
 
 async function resolveIdentity(user){
-  // Determine staff vs chef the same way the SQL helper does:
-  // a chef is anyone with a matching mn_chefs.user_id row.
   const {data, error} = await db.from("mn_chefs").select("*").eq("user_id", user.id).maybeSingle();
   if(error){ console.warn("Couldn't resolve chef identity", error); }
   if(data){
-    myChefRow = data; isStaff = false;
+    myChefRow = data; isStaff = false; identityStatus = "chef";
     $("rolePill").textContent = data.business_name || "Chef";
     $("appSubtitle").textContent = "Chef ordering";
-  } else {
-    myChefRow = null; isStaff = true;
-    $("rolePill").textContent = "Staff";
-    $("appSubtitle").textContent = "Staff admin";
+    return;
   }
+
+  // No mn_chefs row yet — either this is staff, or someone mid-way through
+  // the request-access flow. Check for an existing pending request first.
+  const {data:existingReq} = await db.from("mn_chef_requests").select("*").eq("user_id", user.id).maybeSingle();
+  if(existingReq){
+    identityStatus = "pending";
+    myChefRow = null; isStaff = false;
+    return;
+  }
+
+  // No chef row, no request row — were they mid-signup just now (came
+  // straight from the request-access form)? If so, write the request row
+  // now that we have a real auth.uid() to attach it to.
+  let savedDetails = pendingRequestDetails;
+  if(!savedDetails){
+    try{ const raw=sessionStorage.getItem("mn_pending_request"); if(raw) savedDetails=JSON.parse(raw); }catch(e){}
+  }
+  if(savedDetails && savedDetails.email && savedDetails.email.toLowerCase()===user.email.toLowerCase()){
+    const {error:insertErr} = await db.from("mn_chef_requests").insert({
+      user_id:user.id, business_name:savedDetails.business_name,
+      contact_name:savedDetails.contact_name, email:savedDetails.email, phone:savedDetails.phone
+    });
+    if(insertErr) console.warn("Couldn't save access request", insertErr);
+    try{ sessionStorage.removeItem("mn_pending_request"); }catch(e){}
+    pendingRequestDetails=null;
+    identityStatus = "pending";
+    myChefRow = null; isStaff = false;
+    return;
+  }
+
+  // Genuinely staff: authenticated, no chef row, no request row, and no
+  // pending signup details on hand.
+  identityStatus = "staff";
+  myChefRow = null; isStaff = true;
+  $("rolePill").textContent = "Staff";
+  $("appSubtitle").textContent = "Staff admin";
 }
 
 db.auth.onAuthStateChange(async (event, session)=>{
   if(session?.user){
     currentUser=session.user;
     await resolveIdentity(session.user);
+    if(identityStatus==="pending"){
+      showPendingScreen();
+      return;
+    }
     showApp();
     if(event==="SIGNED_IN"||event==="INITIAL_SESSION"){
       boot();
@@ -661,16 +770,18 @@ function useStandingOrder(id){
 }
 
 /* ================= STAFF APP ================= */
-let allOrders=[], allStandingOrders=[];
+let allOrders=[], allStandingOrders=[], chefRequests=[];
 let staffTab="summary";
 
 async function loadStaffOnlyData(){
-  const [c, o] = await Promise.all([
+  const [c, o, r] = await Promise.all([
     db.from("mn_chefs").select("*").order("business_name"),
     db.from("mn_orders").select("*, mn_order_items(*), mn_chefs(business_name)").order("created_at",{ascending:false}),
+    db.from("mn_chef_requests").select("*").eq("status","pending").order("created_at",{ascending:true}),
   ]);
   chefs = c.data||[];
   allOrders = o.data||[];
+  chefRequests = r.data||[];
 }
 
 function renderStaffApp(){
@@ -678,7 +789,7 @@ function renderStaffApp(){
     <div class="tabs">
       <button class="tab ${staffTab==='summary'?'active':''}" onclick="setStaffTab('summary')">This week</button>
       <button class="tab ${staffTab==='orders'?'active':''}" onclick="setStaffTab('orders')">Orders ${pendingCount()?`(${pendingCount()})`:''}</button>
-      <button class="tab ${staffTab==='chefs'?'active':''}" onclick="setStaffTab('chefs')">Chefs</button>
+      <button class="tab ${staffTab==='chefs'?'active':''}" onclick="setStaffTab('chefs')">Chefs ${chefRequests.length?`(${chefRequests.length})`:''}</button>
       <button class="tab ${staffTab==='prices'?'active':''}" onclick="setStaffTab('prices')">Prices</button>
       <button class="tab ${staffTab==='yields'?'active':''}" onclick="setStaffTab('yields')">Yield defaults</button>
     </div>
@@ -807,6 +918,23 @@ async function updateOrderStatus(id, status){
 
 /* ----- CHEFS (onboarding) ----- */
 function renderChefsView(){
+  const requestsHtml = chefRequests.length ? `
+    <div class="card" style="margin-bottom:18px;border:1.5px solid var(--warn)">
+      <div class="section-title" style="color:var(--warn)">Waiting for approval</div>
+      ${chefRequests.map(r=>`
+        <div class="request-row">
+          <div>
+            <div style="font-weight:700">${r.business_name}</div>
+            <div style="font-size:12px;color:var(--muted)">${r.contact_name||''} ${r.email?'· '+r.email:''} ${r.phone?'· '+r.phone:''}</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px">Requested ${new Date(r.created_at).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex:none">
+            <button class="btn btn-ghost btn-sm" onclick="declineChefRequest('${r.id}')" style="color:var(--danger)">Decline</button>
+            <button class="btn btn-primary btn-sm" onclick="approveChefRequest('${r.id}')">Approve</button>
+          </div>
+        </div>`).join("")}
+    </div>` : '';
+
   const rows = chefs.map(c=>`
     <div class="card" style="margin-bottom:12px">
       <div class="order-card-top">
@@ -818,9 +946,10 @@ function renderChefsView(){
       </div>
     </div>`).join("");
   return `
+    ${requestsHtml}
     <div class="card" style="margin-bottom:18px">
-      <div class="section-title">Invite a new chef</div>
-      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">Sends a magic-link sign-in email — no password for them to manage.</p>
+      <div class="section-title">Invite a new chef directly</div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">Most chefs can just use "Request access" on the login screen themselves — use this only if you'd rather set someone up yourself.</p>
       <label for="new_chef_business">Business name</label>
       <input id="new_chef_business" placeholder="The Pines Restaurant">
       <label for="new_chef_contact">Contact name</label>
@@ -830,9 +959,25 @@ function renderChefsView(){
       <label for="new_chef_phone">Phone (optional)</label>
       <input id="new_chef_phone">
       <button class="btn btn-primary" onclick="inviteChef()">Send invite</button>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">Needs the invite service to be deployed — if it's not set up yet, ask the chef to use "Request access" instead.</div>
     </div>
     ${rows || '<div class="card empty-state">No chefs onboarded yet.</div>'}
   `;
+}
+async function approveChefRequest(requestId){
+  const {data, error} = await db.rpc("mn_approve_chef_request", {request_id: requestId});
+  if(error){ toast("Couldn't approve: "+error.message); return; }
+  toast("Approved — they'll see the ordering app next time they sign in");
+  await loadStaffOnlyData();
+  renderStaffApp();
+}
+async function declineChefRequest(requestId){
+  if(!confirm("Decline this request? They won't be notified, so let them know separately if needed.")) return;
+  const {error} = await db.rpc("mn_decline_chef_request", {request_id: requestId});
+  if(error){ toast("Couldn't decline: "+error.message); return; }
+  toast("Declined");
+  await loadStaffOnlyData();
+  renderStaffApp();
 }
 async function inviteChef(){
   const business_name=$("new_chef_business").value.trim();
