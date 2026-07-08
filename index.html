@@ -12,7 +12,7 @@
 <style>
 :root{
   /* Markwood brand tokens — sampled from BrandGuide.jpeg + memory canon */
-  --brown:#4A2017; --maroon:#A8331D; --blush:#EACDC5; --cream:#FAE7D9;
+  --brown:#4A2017; --maroon:#702819; --blush:#EACDC5; --cream:#FAE7D9;
   --bg:var(--cream); --card:#FFFFFF; --ink:var(--brown); --muted:#8A6F62;
   --line:#E8D2C5; --accent:var(--maroon); --accent-ink:#FFFFFF;
   /* functional-only additions, not in brand guide — kept desaturated
@@ -36,7 +36,7 @@ a{color:var(--maroon)}
 
 /* ===== App shell ===== */
 #app{min-height:100vh;display:flex;flex-direction:column}
-header.appbar{background:var(--maroon);color:#fff;position:sticky;top:0;z-index:50;box-shadow:var(--shadow)}
+header.appbar{background:var(--brown);color:#fff;position:sticky;top:0;z-index:50;box-shadow:var(--shadow)}
 .appbar-inner{display:flex;align-items:center;gap:12px;padding:14px 20px;max-width:1100px;margin:0 auto}
 .brand-mark{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
 .brand-mark svg{width:30px;height:30px;flex:none}
@@ -95,7 +95,7 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .pill.muted{background:var(--blush);color:var(--brown)}
 .spinner{width:22px;height:22px;border:3px solid var(--blush);border-top-color:var(--maroon);border-radius:50%;animation:spin .7s linear infinite;margin:30px auto}
 @keyframes spin{to{transform:rotate(360deg)}}
-.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--maroon);color:#fff;padding:12px 22px;border-radius:30px;font-size:13px;font-weight:600;box-shadow:var(--shadow-lift);z-index:200;opacity:0;transition:opacity .25s ease}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--brown);color:#fff;padding:12px 22px;border-radius:30px;font-size:13px;font-weight:600;box-shadow:var(--shadow-lift);z-index:200;opacity:0;transition:opacity .25s ease}
 .toast.show{opacity:1}
 
 /* ===== Board (signature element) ===== */
@@ -119,7 +119,7 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .btn-sm{padding:8px 12px;font-size:12px}
 .special-row{display:flex;align-items:center;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--cream)}
 .special-row:last-child{border-bottom:none}
-.sticky-cart-bar{position:fixed;bottom:0;left:0;right:0;background:var(--maroon);color:#fff;padding:16px 20px;display:none;align-items:center;justify-content:space-between;font-weight:700;cursor:pointer;box-shadow:0 -4px 14px rgba(74,32,23,.2);max-width:1100px;margin:0 auto;border-radius:var(--radius) var(--radius) 0 0}
+.sticky-cart-bar{position:fixed;bottom:0;left:0;right:0;background:var(--brown);color:#fff;padding:16px 20px;display:none;align-items:center;justify-content:space-between;font-weight:700;cursor:pointer;box-shadow:0 -4px 14px rgba(74,32,23,.2);max-width:1100px;margin:0 auto;border-radius:var(--radius) var(--radius) 0 0}
 .sticky-cart-bar.show{display:flex}
 
 /* ===== Cart ===== */
@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.36"; // pre-launch build; 1.0 = first real launch — fixed magic-link session config
+const APP_VERSION = "0.37"; // pre-launch build; 1.0 = first real launch — softened accent colour, calmer header/cart bar
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
