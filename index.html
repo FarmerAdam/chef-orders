@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.38"; // pre-launch build; 1.0 = first real launch — edit/deactivate/delete chefs
+const APP_VERSION = "0.40"; // pre-launch build; 1.0 = first real launch — per-cohort harvest-timing (handles staggered/split stocking)
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -493,11 +493,42 @@ function batchStateCounts(batch){
   }
   return counts;
 }
+/* A batch is often stocked into fruiting in stages (e.g. 12 blocks Monday,
+   6-8 more Wednesday/Thursday from the same larger inoculation) — each of
+   those moves is its own cohort with its own "started fruiting" date, since
+   the Wednesday blocks aren't as far along as Monday's.
+   There are no per-block IDs, so we can't know exactly *which* blocks left
+   fruiting later (harvested, moved to complete, contaminated, etc) — we
+   assume FIFO: whatever's left fruiting is depleted from the earliest-
+   arrived cohort first, since in practice the earliest-fruiting blocks are
+   the ones that get picked/cleared first anyway. Returns each still-standing
+   cohort with its own arrival date and remaining count. */
+function fruitingCohorts(batchId){
+  const inflow = movements.filter(m=>m.batch_id===batchId && m.to_state==="fruiting")
+    .sort((a,b)=> a.move_date < b.move_date ? -1 : 1)
+    .map(m=>({date:m.move_date, remaining:m.count||0}));
+  let outflow = movements.filter(m=>m.batch_id===batchId && m.from_state==="fruiting")
+    .reduce((s,m)=>s+(m.count||0),0);
+  for(const c of inflow){
+    if(outflow<=0) break;
+    const take = Math.min(c.remaining, outflow);
+    c.remaining -= take; outflow -= take;
+  }
+  return inflow.filter(c=>c.remaining>0);
+}
+function daysSince(dateStr){
+  const d = new Date(dateStr); const now = new Date();
+  return Math.floor((now - d) / (1000*60*60*24));
+}
 
 /* ----- This week's availability board -----
    For every species with blocks CURRENTLY in 'fruiting', predict a
    conservative kg range from yield defaults. Blend in actual harvest
    weight already logged in the last 7 days (that's real, not predicted).
+   Each fruiting cohort (see fruitingCohorts above) that hasn't been fruiting
+   long enough yet (per species' days_to_harvest_low) is excluded entirely,
+   rather than shown as available before it's actually pickable — other,
+   older cohorts of the same batch can still count if they're ready.
    Output sorted by total conservative estimate, descending. */
 function computeAvailabilityBoard(){
   const sevenDaysAgo = new Date(Date.now() - 7*24*60*60*1000);
@@ -505,10 +536,14 @@ function computeAvailabilityBoard(){
 
   for(const b of batches){
     if(b.archived) continue;
-    const counts = batchStateCounts(b);
-    const fruitingBlocks = counts.fruiting||0;
-    if(fruitingBlocks<=0) continue;
     const yd = yieldFor(b.species);
+    const cohorts = fruitingCohorts(b.id);
+    let fruitingBlocks = 0;
+    for(const c of cohorts){
+      if(yd?.days_to_harvest_low!=null && daysSince(c.date) < yd.days_to_harvest_low) continue; // this cohort isn't ready yet — hide just this portion
+      fruitingBlocks += c.remaining;
+    }
+    if(fruitingBlocks<=0) continue;
     if(!bySpecies[b.species]) bySpecies[b.species]={ species:b.species, predictedLow:0, predictedHigh:0, fruitingBlocks:0, actualKgThisWeek:0, batchIds:[] };
     const entry = bySpecies[b.species];
     entry.fruitingBlocks += fruitingBlocks;
@@ -1307,6 +1342,18 @@ function renderYieldsView(){
         <span style="color:var(--muted)">–</span>
         <input type="number" min="0" step="0.05" class="qty-input" style="width:75px" value="${y.yield_kg_per_block_high}" onchange="updateYieldField('${escSpecies(y.species)}','yield_kg_per_block_high',parseFloat(this.value)||0)">
         <span style="font-size:12px;color:var(--muted)">kg/block</span>
+      </div>`).join("")}
+  </div>
+  <div class="card" style="margin-top:18px">
+    <div class="section-title">Days to harvest (from moving to fruiting)</div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:14px">A batch is hidden from the availability board until it's been fruiting at least this many days — oysters might be 7–10, lion's mane 14–18. Leave blank for a species and it'll show as available as soon as it's fruiting (the old behaviour), until you fill this in.</p>
+    ${yieldDefaults.map(y=>`
+      <div class="price-row">
+        <span style="flex:1">${y.species}</span>
+        <input type="number" min="0" step="1" class="qty-input" style="width:75px" placeholder="—" value="${y.days_to_harvest_low??''}" onchange="updateYieldField('${escSpecies(y.species)}','days_to_harvest_low',this.value?parseInt(this.value):null)">
+        <span style="color:var(--muted)">–</span>
+        <input type="number" min="0" step="1" class="qty-input" style="width:75px" placeholder="—" value="${y.days_to_harvest_high??''}" onchange="updateYieldField('${escSpecies(y.species)}','days_to_harvest_high',this.value?parseInt(this.value):null)">
+        <span style="font-size:12px;color:var(--muted)">days</span>
       </div>`).join("")}
   </div>`;
 }
