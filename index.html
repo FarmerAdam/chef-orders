@@ -263,11 +263,11 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.45"; // pre-launch build; 1.0 = first real launch — edit/cancel orders before cutoff (chef), full edit/delete (staff)
+const APP_VERSION = "0.46"; // pre-launch build; 1.0 = first real launch — fixed timezone bug: auto-selected Thursday/today were computing off UTC, landing a day early in Melbourne
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
-function todayISO(){ return new Date().toISOString().slice(0,10); }
+function todayISO(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
 /* ================= STATE ================= */
 let currentUser=null;     // auth.users row (session.user)
@@ -962,7 +962,7 @@ function currentDeliveryThursday(){
   d.setDate(d.getDate() + ((4-day+7)%7)); // roll forward to the upcoming (or today's) Thursday
   const cutoff = new Date(d); cutoff.setDate(cutoff.getDate()-1); // Wednesday 00:00 = the moment Tuesday's cutoff passes
   if(now >= cutoff) d.setDate(d.getDate()+7); // this week's window closed — push to next Thursday
-  return d.toISOString().slice(0,10);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
 async function submitOrder(){
