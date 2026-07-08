@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.37"; // pre-launch build; 1.0 = first real launch — softened accent colour, calmer header/cart bar
+const APP_VERSION = "0.38"; // pre-launch build; 1.0 = first real launch — edit/deactivate/delete chefs
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -1141,6 +1141,8 @@ async function updateOrderStatus(id, status){
 }
 
 /* ----- CHEFS (onboarding) ----- */
+let editingChefId=null;
+function escAttr(s){ return String(s??"").replace(/"/g,"&quot;"); }
 function renderChefsView(){
   const requestsHtml = chefRequests.length ? `
     <div class="card" style="margin-bottom:18px;border:1.5px solid var(--warn)">
@@ -1159,8 +1161,25 @@ function renderChefsView(){
         </div>`).join("")}
     </div>` : '';
 
-  const rows = chefs.map(c=>`
-    <div class="card" style="margin-bottom:12px">
+  const rows = chefs.map(c=>{
+    if(editingChefId===c.id){
+      return `<div class="card" style="margin-bottom:12px">
+        <div class="section-title">Edit chef</div>
+        <label for="edit_chef_business">Business name</label>
+        <input id="edit_chef_business" value="${escAttr(c.business_name)}">
+        <label for="edit_chef_contact">Contact name</label>
+        <input id="edit_chef_contact" value="${escAttr(c.contact_name)}">
+        <label for="edit_chef_email">Email</label>
+        <input id="edit_chef_email" type="email" value="${escAttr(c.email)}">
+        <label for="edit_chef_phone">Phone</label>
+        <input id="edit_chef_phone" value="${escAttr(c.phone)}">
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-primary btn-sm" onclick="saveChefEdit('${c.id}')">Save</button>
+          <button class="btn btn-ghost btn-sm" onclick="editingChefId=null;renderStaffApp();">Cancel</button>
+        </div>
+      </div>`;
+    }
+    return `<div class="card" style="margin-bottom:12px">
       <div class="order-card-top">
         <div>
           <div style="font-weight:700">${c.business_name}</div>
@@ -1168,7 +1187,13 @@ function renderChefsView(){
         </div>
         <span class="pill ${c.active?'good':'muted'}">${c.active?'active':'inactive'}</span>
       </div>
-    </div>`).join("");
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="editingChefId='${c.id}';renderStaffApp();">Edit</button>
+        <button class="btn btn-ghost btn-sm" onclick="toggleChefActive('${c.id}',${!c.active})">${c.active?'Deactivate':'Reactivate'}</button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="deleteChef('${c.id}','${escSpecies(c.business_name)}')">Delete</button>
+      </div>
+    </div>`;
+  }).join("");
   return `
     ${requestsHtml}
     <div class="card" style="margin-bottom:18px">
@@ -1187,6 +1212,31 @@ function renderChefsView(){
     </div>
     ${rows || '<div class="card empty-state">No chefs onboarded yet.</div>'}
   `;
+}
+async function saveChefEdit(id){
+  const business_name=$("edit_chef_business").value.trim();
+  const contact_name=$("edit_chef_contact").value.trim()||null;
+  const email=$("edit_chef_email").value.trim();
+  const phone=$("edit_chef_phone").value.trim()||null;
+  if(!business_name||!email){ toast("Business name and email are required"); return; }
+  const {error}=await db.from("mn_chefs").update({business_name,contact_name,email,phone}).eq("id",id);
+  if(error){ toast("Couldn't save: "+error.message); return; }
+  editingChefId=null;
+  toast("Saved");
+  await loadStaffOnlyData(); renderStaffApp();
+}
+async function toggleChefActive(id,makeActive){
+  const {error}=await db.from("mn_chefs").update({active:makeActive}).eq("id",id);
+  if(error){ toast("Couldn't update: "+error.message); return; }
+  toast(makeActive?"Reactivated":"Deactivated — they'll lose access to the ordering board");
+  await loadStaffOnlyData(); renderStaffApp();
+}
+async function deleteChef(id,businessName){
+  if(!confirm(`Delete ${businessName} entirely? This can't be undone. If they have any past orders, deleting may fail — deactivating is safer if you want to keep their order history.`)) return;
+  const {error}=await db.from("mn_chefs").delete().eq("id",id);
+  if(error){ toast("Couldn't delete (likely has existing orders) — try Deactivate instead: "+error.message); return; }
+  toast("Deleted");
+  await loadStaffOnlyData(); renderStaffApp();
 }
 async function approveChefRequest(requestId){
   const {data, error} = await db.rpc("mn_approve_chef_request", {request_id: requestId});
