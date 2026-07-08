@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.41"; // pre-launch build; 1.0 = first real launch — delivery fee by chef zone
+const APP_VERSION = "0.42"; // pre-launch build; 1.0 = first real launch — Thursday delivery default with Tuesday-midnight cutoff
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -889,19 +889,46 @@ function renderCartView(){
         <span>Estimated total</span>
         <span class="mono">${hasQuoteItems?'+ quote items · ':''}$${(total+deliveryFee).toFixed(2)}</span>
       </div>
-      <label for="order_date">When do you need this?</label>
-      <input type="date" id="order_date" value="${nextWeekday(2)}">
+      <label>When do you need this?</label>
+      <div id="deliveryDateChoice">${renderDeliveryDateChoice()}</div>
       <label for="order_notes">Notes for Adam &amp; Em (optional)</label>
       <textarea id="order_notes" rows="2" placeholder="Delivery instructions, substitution preferences, etc." oninput="orderNote=this.value">${orderNote}</textarea>
       <button class="btn btn-primary" onclick="submitOrder()">Place order</button>
     </div>
   `;
 }
+let useCustomDeliveryDate=false;
+function renderDeliveryDateChoice(){
+  const thu=currentDeliveryThursday();
+  const thuLabel=new Date(thu).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'short'});
+  if(!useCustomDeliveryDate){
+    return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" disabled>This Thursday (${thuLabel})</button>
+      <button class="btn-ghost btn-sm" style="border:none;text-decoration:underline" onclick="useCustomDeliveryDate=true; renderChefTab()">Need a different date?</button>
+    </div>
+    <input type="hidden" id="order_date" value="${thu}">`;
+  }
+  return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <input type="date" id="order_date" value="${thu}" style="width:auto">
+    <button class="btn-ghost btn-sm" style="border:none;text-decoration:underline" onclick="useCustomDeliveryDate=false; renderChefTab()">Use this Thursday instead</button>
+  </div>
+  <div style="font-size:12px;color:var(--muted);margin-top:6px">We deliver Thursdays — pick a different date only for a special one-off request, and check with Adam &amp; Em first.</div>`;
+}
 function setCartNote(species, val){ cartNotes[species] = val; }
 
-function nextWeekday(dayOfWeek){
-  const d=new Date(); const diff=(dayOfWeek+7-d.getDay())%7 || 7;
-  d.setDate(d.getDate()+diff); return d.toISOString().slice(0,10);
+/* Deliveries are always Thursday, with a hard cutoff at the end of the
+   preceding Tuesday (i.e. ordering closes going into Wednesday). Once that
+   cutoff passes, the "current" delivery date rolls forward to the following
+   Thursday automatically — chefs are never shown a Thursday whose window
+   has already closed. */
+function currentDeliveryThursday(){
+  const now = new Date();
+  const d = new Date(now); d.setHours(0,0,0,0);
+  const day = d.getDay(); // 0=Sun..6=Sat, Thursday=4
+  d.setDate(d.getDate() + ((4-day+7)%7)); // roll forward to the upcoming (or today's) Thursday
+  const cutoff = new Date(d); cutoff.setDate(cutoff.getDate()-1); // Wednesday 00:00 = the moment Tuesday's cutoff passes
+  if(now >= cutoff) d.setDate(d.getDate()+7); // this week's window closed — push to next Thursday
+  return d.toISOString().slice(0,10);
 }
 
 async function submitOrder(){
@@ -922,7 +949,7 @@ async function submitOrder(){
   const {error:itemErr} = await db.from("mn_order_items").insert(itemRows);
   if(itemErr){ toast("Order created but items failed to save: "+itemErr.message); return; }
 
-  cart={}; cartNotes={}; orderNote="";
+  cart={}; cartNotes={}; orderNote=""; useCustomDeliveryDate=false;
   toast("Order placed — Adam & Em will confirm shortly");
   await loadChefOnlyData();
   setChefTab('history');
@@ -1176,7 +1203,7 @@ async function staffSubmitOrder(){
   const chef_id=$("staff_order_chef").value;
   if(!chef_id||!staffDraftOrder.length) return;
   const chef=chefs.find(c=>c.id===chef_id);
-  const {data:order,error}=await db.from("mn_orders").insert({chef_id, order_source:'staff', status:'confirmed', requested_date: nextWeekday(2), delivery_fee: deliveryFeeFor(chef)}).select().single();
+  const {data:order,error}=await db.from("mn_orders").insert({chef_id, order_source:'staff', status:'confirmed', requested_date: currentDeliveryThursday(), delivery_fee: deliveryFeeFor(chef)}).select().single();
   if(error){ toast("Couldn't save order: "+error.message); return; }
   const rows=staffDraftOrder.map(l=>({order_id:order.id, species:l.species, qty_kg:l.qty_kg, unit_price_per_kg: priceFor(l.species)?.unit_price_per_kg ?? null}));
   await db.from("mn_order_items").insert(rows);
