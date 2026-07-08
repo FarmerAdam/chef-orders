@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.43"; // pre-launch build; 1.0 = first real launch — pending-order status on cart page, standing-order save moved to ordering page
+const APP_VERSION = "0.44"; // pre-launch build; 1.0 = first real launch — true recurring standing orders (auto-placed weekly, skip/deactivate, DB-scheduled)
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -851,17 +851,28 @@ function requestSpecialQuote(species){
 /* ----- CART / CHECKOUT ----- */
 function pendingOrderStatusHTML(){
   const thu = currentDeliveryThursday();
-  const existing = chefOrders.find(o=>o.requested_date===thu && o.status!=='cancelled');
-  if(!existing) return '';
-  const items=existing.mn_order_items||[];
-  const total=items.reduce((s,i)=> s + (i.unit_price_per_kg ? i.unit_price_per_kg*i.qty_kg : 0), 0) + (existing.delivery_fee??0);
   const thuLabel=new Date(thu).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'short'});
-  return `<div class="card" style="margin-top:14px;text-align:left;border:1.5px solid var(--good)">
-    <div style="font-weight:700">You already have an order in for ${thuLabel}</div>
-    <div style="font-size:13px;color:var(--muted);margin-top:4px">${items.length} item${items.length===1?'':'s'} · $${total.toFixed(2)} · status: ${existing.status}</div>
-    <div style="font-size:12px;color:var(--muted);margin-top:8px">Need to add more or change something? See Order History, or check with Adam &amp; Em — changes need to land before the Tuesday midnight cutoff.</div>
-    <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="setChefTab('history')">View in Order History →</button>
-  </div>`;
+  const existing = chefOrders.find(o=>o.requested_date===thu && o.status!=='cancelled');
+  if(existing){
+    const items=existing.mn_order_items||[];
+    const total=items.reduce((s,i)=> s + (i.unit_price_per_kg ? i.unit_price_per_kg*i.qty_kg : 0), 0) + (existing.delivery_fee??0);
+    return `<div class="card" style="margin-top:14px;text-align:left;border:1.5px solid var(--good)">
+      <div style="font-weight:700">You already have an order in for ${thuLabel}</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:4px">${items.length} item${items.length===1?'':'s'} · $${total.toFixed(2)} · status: ${existing.status}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">Need to add more or change something? See Order History, or check with Adam &amp; Em — changes need to land before the Tuesday midnight cutoff.</div>
+      <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="setChefTab('history')">View in Order History →</button>
+    </div>`;
+  }
+  const activeStanding = chefStandingOrders.find(s=>s.active);
+  if(activeStanding){
+    const isSkipping = activeStanding.skip_date===thu;
+    return `<div class="card" style="margin-top:14px;text-align:left;border:1.5px solid var(--good)">
+      <div style="font-weight:700">Your standing order "${activeStanding.name}" ${isSkipping?`is skipping ${thuLabel}`:`will be placed automatically for ${thuLabel}`}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">It's created automatically at the Tuesday midnight cutoff — no action needed unless you want to change or skip it.</div>
+      <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="setChefTab('standing')">Go to Standing Orders →</button>
+    </div>`;
+  }
+  return '';
 }
 function renderCartView(){
   const items = Object.entries(cart).filter(([,q])=>q>0);
@@ -893,11 +904,13 @@ function renderCartView(){
   }).join("");
   const deliveryFee = deliveryFeeFor(myChefRow);
   const existingForThisWeek = chefOrders.find(o=>o.requested_date===currentDeliveryThursday() && o.status!=='cancelled');
+  const activeStanding = chefStandingOrders.find(s=>s.active);
 
   return `
     <div class="card">
       <div class="section-title">Your order</div>
-      ${existingForThisWeek?`<div class="note-banner" style="margin-bottom:14px;border-color:var(--warn)">You already have an order in for this Thursday. Placing this will add a <b>separate, second order</b> for the same delivery — not change the existing one. If you meant to modify it, check Order History or get in touch with Adam &amp; Em instead.</div>`:''}
+      ${activeStanding?`<div class="note-banner" style="margin-bottom:14px;border-color:var(--warn)">You already have a standing order ("${activeStanding.name}") — would you like to modify that instead? <button class="btn-ghost btn-sm" style="border:none;text-decoration:underline;padding:0" onclick="setChefTab('standing')">Go to Standing Orders →</button></div>`
+        :existingForThisWeek?`<div class="note-banner" style="margin-bottom:14px;border-color:var(--warn)">You already have an order in for this Thursday. Placing this will add a <b>separate, second order</b> for the same delivery — not change the existing one.</div>`:''}
       ${rows}
       <div class="order-item-row" style="padding:12px 0;border-bottom:1px solid var(--cream)">
         <span>Delivery</span><span class="mono">$${deliveryFee.toFixed(2)}</span>
@@ -1007,22 +1020,98 @@ function renderHistoryView(){
 
 /* ----- STANDING ORDERS ----- */
 function renderStandingView(){
+  const thu = currentDeliveryThursday();
+  const thuLabel = new Date(thu).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'short'});
   const list = chefStandingOrders.map(so=>{
-    const items=so.mn_standing_order_items||[];
-    return `<div class="card" style="margin-bottom:14px">
+    const items = so.mn_standing_order_items||[];
+    const isActive = !!so.active;
+    const isSkipping = so.skip_date === thu;
+    return `<div class="card" style="margin-bottom:14px${isActive?';border:1.5px solid var(--good)':''}">
       <div class="order-card-top">
-        <div style="font-weight:700">${so.name}</div>
-        <button class="btn btn-ghost btn-sm" onclick="useStandingOrder('${so.id}')">Add to cart</button>
+        <div>
+          <div style="font-weight:700">${so.name}</div>
+          ${isActive?`<div style="font-size:12px;color:var(--good)">Your recurring order${isSkipping?` — skipping ${thuLabel}`:''}</div>`:''}
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${isActive
+            ? `<button class="btn btn-ghost btn-sm" onclick="deactivateStandingOrder('${so.id}')">Deactivate</button>`
+            : `<button class="btn btn-primary btn-sm" onclick="activateStandingOrder('${so.id}')">Make this my recurring order</button>`}
+          <button class="btn btn-ghost btn-sm" onclick="useStandingOrder('${so.id}')">Add to cart</button>
+        </div>
       </div>
-      <div style="margin-top:10px">${items.map(i=>`<div class="order-item-row"><span>${i.species}</span><span class="mono">${fmtKg(i.qty_kg)}kg</span></div>`).join("")}</div>
+      <div style="margin-top:10px">
+        ${items.map(i=>`<div class="order-item-row">
+          <span>${i.species}</span>
+          <span style="display:flex;align-items:center;gap:8px">
+            <input type="number" min="0" step="0.5" class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="updateStandingItem('${i.id}','${so.id}',this.value)">
+            <button onclick="removeStandingItem('${i.id}','${so.id}')" style="color:var(--danger);border:none;background:none">✕</button>
+          </span>
+        </div>`).join("")}
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <select id="add_item_sp_${so.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escSpecies(p.species)}">${p.species}</option>`).join("")}</select>
+          <input type="number" min="0" step="0.5" id="add_item_qty_${so.id}" placeholder="kg" style="width:80px">
+          <button class="btn btn-ghost btn-sm" onclick="addStandingItem('${so.id}')">Add</button>
+        </div>
+      </div>
+      ${isActive?`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--cream)">
+        ${isSkipping
+          ? `<button class="btn btn-ghost btn-sm" onclick="unskipStandingOrder('${so.id}')">Cancel skip — include ${thuLabel} after all</button>`
+          : `<button class="btn btn-ghost btn-sm" onclick="skipStandingOrder('${so.id}','${thu}')">Skip ${thuLabel} only</button>`}
+      </div>`:''}
     </div>`;
   }).join("");
   return `
     <div class="card empty-state" style="margin-bottom:14px;text-align:left;padding:18px 20px">
-      <div style="font-size:13px">Standing orders are saved templates — build a cart on <b>Your order</b> and use "Save as a standing order" there. Come back here any time to add one straight back to your cart.</div>
+      <div style="font-size:13px">Build a cart on <b>Your order</b> and use "Save as a standing order" there to create one. Then activate it here as your recurring order — it'll be placed automatically every Thursday (cutoff Tuesday midnight) unless you skip a week or deactivate it. Only one can be active at a time.</div>
     </div>
     ${list || `<div class="card empty-state">No standing orders saved yet.</div>`}
   `;
+}
+async function activateStandingOrder(id){
+  await db.from("mn_standing_orders").update({active:false}).eq("chef_id",myChefRow.id);
+  const {error}=await db.from("mn_standing_orders").update({active:true}).eq("id",id);
+  if(error){ toast("Couldn't activate: "+error.message); return; }
+  toast("Set as your recurring order — it'll be placed automatically each Thursday");
+  await loadChefOnlyData(); renderChefTab();
+}
+async function deactivateStandingOrder(id){
+  const {error}=await db.from("mn_standing_orders").update({active:false}).eq("id",id);
+  if(error){ toast("Couldn't deactivate: "+error.message); return; }
+  toast("Deactivated — this won't be placed automatically anymore");
+  await loadChefOnlyData(); renderChefTab();
+}
+async function skipStandingOrder(id,date){
+  const {error}=await db.from("mn_standing_orders").update({skip_date:date}).eq("id",id);
+  if(error){ toast("Couldn't skip: "+error.message); return; }
+  toast("Skipping that delivery — you'll resume automatically the week after");
+  await loadChefOnlyData(); renderChefTab();
+}
+async function unskipStandingOrder(id){
+  const {error}=await db.from("mn_standing_orders").update({skip_date:null}).eq("id",id);
+  if(error){ toast("Couldn't undo: "+error.message); return; }
+  toast("Skip cancelled");
+  await loadChefOnlyData(); renderChefTab();
+}
+async function updateStandingItem(itemId,soId,val){
+  const qty=parseFloat(val);
+  if(!qty||qty<=0){ await removeStandingItem(itemId,soId); return; }
+  await db.from("mn_standing_order_items").update({qty_kg:qty}).eq("id",itemId);
+  await loadChefOnlyData(); renderChefTab();
+}
+async function removeStandingItem(itemId,soId){
+  await db.from("mn_standing_order_items").delete().eq("id",itemId);
+  await loadChefOnlyData(); renderChefTab();
+}
+async function addStandingItem(soId){
+  const species=$(`add_item_sp_${soId}`).value;
+  const qty=parseFloat($(`add_item_qty_${soId}`).value);
+  if(!species||!qty||qty<=0){ toast("Pick a species and quantity"); return; }
+  const so=chefStandingOrders.find(s=>s.id===soId);
+  const existing=(so?.mn_standing_order_items||[]).find(i=>i.species===species);
+  if(existing){ await db.from("mn_standing_order_items").update({qty_kg:existing.qty_kg+qty}).eq("id",existing.id); }
+  else { await db.from("mn_standing_order_items").insert({standing_order_id:soId, species, qty_kg:qty}); }
+  toast("Added");
+  await loadChefOnlyData(); renderChefTab();
 }
 
 async function saveStandingOrder(){
@@ -1181,7 +1270,7 @@ function renderOrdersView(){
       <div class="order-card-top">
         <div>
           <div style="font-weight:700">${o.mn_chefs?.business_name||'Unknown chef'}</div>
-          <div style="font-size:12px;color:var(--muted)">Ordered ${new Date(o.created_at).toLocaleDateString('en-AU',{day:'numeric',month:'short'})} · for ${new Date(o.requested_date).toLocaleDateString('en-AU',{day:'numeric',month:'short'})} · ${o.order_source==='staff'?'logged by staff':'self-ordered'}</div>
+          <div style="font-size:12px;color:var(--muted)">Ordered ${new Date(o.created_at).toLocaleDateString('en-AU',{day:'numeric',month:'short'})} · for ${new Date(o.requested_date).toLocaleDateString('en-AU',{day:'numeric',month:'short'})} · ${o.order_source==='staff'?'logged by staff':o.order_source==='standing'?'recurring order':'self-ordered'}</div>
         </div>
         <select onchange="updateOrderStatus('${o.id}', this.value)" style="width:auto;padding:6px 10px">
           ${['pending','confirmed','fulfilled','cancelled'].map(s=>`<option value="${s}" ${o.status===s?'selected':''}>${s}</option>`).join("")}
