@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.40"; // pre-launch build; 1.0 = first real launch — per-cohort harvest-timing (handles staggered/split stocking)
+const APP_VERSION = "0.41"; // pre-launch build; 1.0 = first real launch — delivery fee by chef zone
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -809,6 +809,11 @@ function addFarmersSelectionToCart(){
 
 function cssId(s){ return s.replace(/[^a-zA-Z0-9]/g,'_'); }
 function escSpecies(s){ return s.replace(/'/g,"\\'"); }
+/* Delivery fees, GST-inclusive. Only two tiers today — add more here if a
+   new remote area comes up rather than building a full postcode map. */
+const DELIVERY_FEES = { standard: 10.00, remote_courier: 22.00 };
+const DELIVERY_ZONE_LABELS = { standard: "Standard ($10 inc. GST)", remote_courier: "Mansfield/Benalla courier ($22 inc. GST)" };
+function deliveryFeeFor(chef){ return DELIVERY_FEES[chef?.delivery_zone] ?? DELIVERY_FEES.standard; }
 
 // Stable colour per species so the board has visual rhythm without being garish.
 const SPECIES_PALETTE = {
@@ -871,14 +876,18 @@ function renderCartView(){
       <input class="cart-item-note" placeholder="Note for this item (optional) — e.g. 'extra fresh please'" value="${noteVal}" oninput="setCartNote('${escSpecies(species)}', this.value)">
     </div>`;
   }).join("");
+  const deliveryFee = deliveryFeeFor(myChefRow);
 
   return `
     <div class="card">
       <div class="section-title">Your order</div>
       ${rows}
+      <div class="order-item-row" style="padding:12px 0;border-bottom:1px solid var(--cream)">
+        <span>Delivery</span><span class="mono">$${deliveryFee.toFixed(2)}</span>
+      </div>
       <div class="cart-total">
         <span>Estimated total</span>
-        <span class="mono">${hasQuoteItems?'+ quote items · ':''}$${total.toFixed(2)}</span>
+        <span class="mono">${hasQuoteItems?'+ quote items · ':''}$${(total+deliveryFee).toFixed(2)}</span>
       </div>
       <label for="order_date">When do you need this?</label>
       <input type="date" id="order_date" value="${nextWeekday(2)}">
@@ -902,7 +911,7 @@ async function submitOrder(){
   const notes = ($("order_notes").value||orderNote||"").trim() || null;
 
   const {data:order, error} = await db.from("mn_orders").insert({
-    chef_id: myChefRow.id, order_source:'self', status:'pending', requested_date, notes
+    chef_id: myChefRow.id, order_source:'self', status:'pending', requested_date, notes, delivery_fee: deliveryFeeFor(myChefRow)
   }).select().single();
   if(error){ toast("Couldn't place order: "+error.message); return; }
 
@@ -926,6 +935,7 @@ function renderHistoryView(){
   return chefOrders.map(o=>{
     const items=o.mn_order_items||[];
     const total=items.reduce((s,i)=> s + (i.unit_price_per_kg ? i.unit_price_per_kg*i.qty_kg : 0), 0);
+    const fee=o.delivery_fee??0;
     return `<div class="card" style="margin-bottom:14px">
       <div class="order-card-top">
         <div>
@@ -941,7 +951,8 @@ function renderHistoryView(){
         </div>`).join("")}
       </div>
       ${o.notes?`<div style="margin-top:10px;font-size:13px;color:var(--muted)">Note for Adam &amp; Em: "${o.notes}"</div>`:''}
-      <div class="cart-total" style="margin-top:10px"><span>Total</span><span class="mono">$${total.toFixed(2)}</span></div>
+      <div class="order-item-row" style="margin-top:6px"><span>Delivery</span><span class="mono">$${fee.toFixed(2)}</span></div>
+      <div class="cart-total" style="margin-top:6px"><span>Total</span><span class="mono">$${(total+fee).toFixed(2)}</span></div>
     </div>`;
   }).join("");
 }
@@ -1107,7 +1118,7 @@ function renderOrdersView(){
     <div class="card" style="margin-bottom:18px">
       <div class="section-title">Log an order on a chef's behalf</div>
       <label for="staff_order_chef">Chef</label>
-      <select id="staff_order_chef">${chefs.map(c=>`<option value="${c.id}">${c.business_name}</option>`).join("")}</select>
+      <select id="staff_order_chef" onchange="renderDraftLines()">${chefs.map(c=>`<option value="${c.id}">${c.business_name}</option>`).join("")}</select>
       <label for="staff_order_species">Species</label>
       <select id="staff_order_species">${priceList.map(p=>`<option value="${p.species}">${p.species}</option>`).join("")}</select>
       <label for="staff_order_qty">Quantity (kg)</label>
@@ -1120,6 +1131,7 @@ function renderOrdersView(){
   const ordersHtml = allOrders.length ? allOrders.map(o=>{
     const items=o.mn_order_items||[];
     const total=items.reduce((s,i)=> s + (i.unit_price_per_kg ? i.unit_price_per_kg*i.qty_kg : 0), 0);
+    const fee=o.delivery_fee??0;
     return `<div class="card" style="margin-bottom:14px">
       <div class="order-card-top">
         <div>
@@ -1135,7 +1147,8 @@ function renderOrdersView(){
         ${i.note?`<div style="font-size:12px;color:var(--warn);margin-top:2px">↳ "${i.note}"</div>`:''}
       </div>`).join("")}</div>
       ${o.notes?`<div style="margin-top:10px;font-size:13px;color:var(--muted)">Note: ${o.notes}</div>`:''}
-      <div class="cart-total" style="margin-top:10px"><span>Total</span><span class="mono">$${total.toFixed(2)}</span></div>
+      <div class="order-item-row" style="margin-top:6px"><span>Delivery</span><span class="mono">$${fee.toFixed(2)}</span></div>
+      <div class="cart-total" style="margin-top:6px"><span>Total</span><span class="mono">$${(total+fee).toFixed(2)}</span></div>
     </div>`;
   }).join("") : `<div class="card empty-state">No orders yet.</div>`;
 
@@ -1152,14 +1165,18 @@ function staffAddOrderLine(){
   renderDraftLines();
 }
 function renderDraftLines(){
-  $("staffDraftLines").innerHTML = staffDraftOrder.map((l,i)=>`<div class="order-item-row"><span>${l.species}</span><span class="mono">${fmtKg(l.qty_kg)}kg <button onclick="removeDraftLine(${i})" style="color:var(--danger);margin-left:8px">✕</button></span></div>`).join("");
+  const chef=chefs.find(c=>c.id===$("staff_order_chef")?.value);
+  const lines = staffDraftOrder.map((l,i)=>`<div class="order-item-row"><span>${l.species}</span><span class="mono">${fmtKg(l.qty_kg)}kg <button onclick="removeDraftLine(${i})" style="color:var(--danger);margin-left:8px">✕</button></span></div>`).join("");
+  const feeLine = staffDraftOrder.length ? `<div class="order-item-row" style="color:var(--muted)"><span>Delivery (${DELIVERY_ZONE_LABELS[chef?.delivery_zone]||DELIVERY_ZONE_LABELS.standard})</span><span class="mono">$${deliveryFeeFor(chef).toFixed(2)}</span></div>` : '';
+  $("staffDraftLines").innerHTML = lines + feeLine;
   $("staffSubmitOrderBtn").classList.toggle("hidden", staffDraftOrder.length===0);
 }
 function removeDraftLine(i){ staffDraftOrder.splice(i,1); renderDraftLines(); }
 async function staffSubmitOrder(){
   const chef_id=$("staff_order_chef").value;
   if(!chef_id||!staffDraftOrder.length) return;
-  const {data:order,error}=await db.from("mn_orders").insert({chef_id, order_source:'staff', status:'confirmed', requested_date: nextWeekday(2)}).select().single();
+  const chef=chefs.find(c=>c.id===chef_id);
+  const {data:order,error}=await db.from("mn_orders").insert({chef_id, order_source:'staff', status:'confirmed', requested_date: nextWeekday(2), delivery_fee: deliveryFeeFor(chef)}).select().single();
   if(error){ toast("Couldn't save order: "+error.message); return; }
   const rows=staffDraftOrder.map(l=>({order_id:order.id, species:l.species, qty_kg:l.qty_kg, unit_price_per_kg: priceFor(l.species)?.unit_price_per_kg ?? null}));
   await db.from("mn_order_items").insert(rows);
@@ -1208,6 +1225,10 @@ function renderChefsView(){
         <input id="edit_chef_email" type="email" value="${escAttr(c.email)}">
         <label for="edit_chef_phone">Phone</label>
         <input id="edit_chef_phone" value="${escAttr(c.phone)}">
+        <label for="edit_chef_zone">Delivery zone</label>
+        <select id="edit_chef_zone">
+          ${Object.entries(DELIVERY_ZONE_LABELS).map(([k,label])=>`<option value="${k}" ${c.delivery_zone===k?'selected':''}>${label}</option>`).join("")}
+        </select>
         <div style="display:flex;gap:8px;margin-top:12px">
           <button class="btn btn-primary btn-sm" onclick="saveChefEdit('${c.id}')">Save</button>
           <button class="btn btn-ghost btn-sm" onclick="editingChefId=null;renderStaffApp();">Cancel</button>
@@ -1219,6 +1240,7 @@ function renderChefsView(){
         <div>
           <div style="font-weight:700">${c.business_name}</div>
           <div style="font-size:12px;color:var(--muted)">${c.contact_name||''} ${c.email?'· '+c.email:''} ${c.phone?'· '+c.phone:''}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${DELIVERY_ZONE_LABELS[c.delivery_zone]||DELIVERY_ZONE_LABELS.standard}</div>
         </div>
         <span class="pill ${c.active?'good':'muted'}">${c.active?'active':'inactive'}</span>
       </div>
@@ -1242,6 +1264,10 @@ function renderChefsView(){
       <input id="new_chef_email" type="email" placeholder="jamie@thepines.com.au">
       <label for="new_chef_phone">Phone (optional)</label>
       <input id="new_chef_phone">
+      <label for="new_chef_zone">Delivery zone</label>
+      <select id="new_chef_zone">
+        ${Object.entries(DELIVERY_ZONE_LABELS).map(([k,label])=>`<option value="${k}">${label}</option>`).join("")}
+      </select>
       <button class="btn btn-primary" onclick="inviteChef()">Send invite</button>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">Needs the invite service to be deployed — if it's not set up yet, ask the chef to use "Request access" instead.</div>
     </div>
@@ -1253,8 +1279,9 @@ async function saveChefEdit(id){
   const contact_name=$("edit_chef_contact").value.trim()||null;
   const email=$("edit_chef_email").value.trim();
   const phone=$("edit_chef_phone").value.trim()||null;
+  const delivery_zone=$("edit_chef_zone").value;
   if(!business_name||!email){ toast("Business name and email are required"); return; }
-  const {error}=await db.from("mn_chefs").update({business_name,contact_name,email,phone}).eq("id",id);
+  const {error}=await db.from("mn_chefs").update({business_name,contact_name,email,phone,delivery_zone}).eq("id",id);
   if(error){ toast("Couldn't save: "+error.message); return; }
   editingChefId=null;
   toast("Saved");
@@ -1294,12 +1321,13 @@ async function inviteChef(){
   if(!business_name||!email){ toast("Business name and email are required"); return; }
   const contact_name=$("new_chef_contact").value.trim()||null;
   const phone=$("new_chef_phone").value.trim()||null;
+  const delivery_zone=$("new_chef_zone").value;
   const {data:session} = await db.auth.getSession();
   try{
     const res = await fetch(`${SUPABASE_URL}/functions/v1/invite-chef`,{
       method:"POST",
       headers:{ "Content-Type":"application/json", "Authorization":`Bearer ${session.session.access_token}` },
-      body: JSON.stringify({email, business_name, contact_name, phone})
+      body: JSON.stringify({email, business_name, contact_name, phone, delivery_zone})
     });
     if(res.status===404){ toast("This isn't set up yet — ask the chef to use \"Request access\" on the login page instead"); return; }
     let out;
