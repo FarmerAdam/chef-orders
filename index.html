@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.42"; // pre-launch build; 1.0 = first real launch — Thursday delivery default with Tuesday-midnight cutoff
+const APP_VERSION = "0.43"; // pre-launch build; 1.0 = first real launch — pending-order status on cart page, standing-order save moved to ordering page
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -849,12 +849,27 @@ function requestSpecialQuote(species){
 }
 
 /* ----- CART / CHECKOUT ----- */
+function pendingOrderStatusHTML(){
+  const thu = currentDeliveryThursday();
+  const existing = chefOrders.find(o=>o.requested_date===thu && o.status!=='cancelled');
+  if(!existing) return '';
+  const items=existing.mn_order_items||[];
+  const total=items.reduce((s,i)=> s + (i.unit_price_per_kg ? i.unit_price_per_kg*i.qty_kg : 0), 0) + (existing.delivery_fee??0);
+  const thuLabel=new Date(thu).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'short'});
+  return `<div class="card" style="margin-top:14px;text-align:left;border:1.5px solid var(--good)">
+    <div style="font-weight:700">You already have an order in for ${thuLabel}</div>
+    <div style="font-size:13px;color:var(--muted);margin-top:4px">${items.length} item${items.length===1?'':'s'} · $${total.toFixed(2)} · status: ${existing.status}</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:8px">Need to add more or change something? See Order History, or check with Adam &amp; Em — changes need to land before the Tuesday midnight cutoff.</div>
+    <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="setChefTab('history')">View in Order History →</button>
+  </div>`;
+}
 function renderCartView(){
   const items = Object.entries(cart).filter(([,q])=>q>0);
   if(!items.length){
     return `<div class="card empty-state">
       <div>Your order is empty. Head back to the board to add some mushrooms.</div>
       <button class="btn btn-ghost" style="margin-top:14px" onclick="setChefTab('board')">← Back to the board</button>
+      ${pendingOrderStatusHTML()}
     </div>`;
   }
   let total=0, hasQuoteItems=false;
@@ -877,10 +892,12 @@ function renderCartView(){
     </div>`;
   }).join("");
   const deliveryFee = deliveryFeeFor(myChefRow);
+  const existingForThisWeek = chefOrders.find(o=>o.requested_date===currentDeliveryThursday() && o.status!=='cancelled');
 
   return `
     <div class="card">
       <div class="section-title">Your order</div>
+      ${existingForThisWeek?`<div class="note-banner" style="margin-bottom:14px;border-color:var(--warn)">You already have an order in for this Thursday. Placing this will add a <b>separate, second order</b> for the same delivery — not change the existing one. If you meant to modify it, check Order History or get in touch with Adam &amp; Em instead.</div>`:''}
       ${rows}
       <div class="order-item-row" style="padding:12px 0;border-bottom:1px solid var(--cream)">
         <span>Delivery</span><span class="mono">$${deliveryFee.toFixed(2)}</span>
@@ -894,6 +911,10 @@ function renderCartView(){
       <label for="order_notes">Notes for Adam &amp; Em (optional)</label>
       <textarea id="order_notes" rows="2" placeholder="Delivery instructions, substitution preferences, etc." oninput="orderNote=this.value">${orderNote}</textarea>
       <button class="btn btn-primary" onclick="submitOrder()">Place order</button>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--cream);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <input id="standing_name" placeholder="Name this order, e.g. \"My usual\"" style="max-width:220px">
+        <button class="btn-ghost btn-sm" onclick="saveStandingOrder()">Save as a standing order</button>
+      </div>
     </div>
   `;
 }
@@ -998,10 +1019,7 @@ function renderStandingView(){
   }).join("");
   return `
     <div class="card empty-state" style="margin-bottom:14px;text-align:left;padding:18px 20px">
-      <div style="font-weight:700;margin-bottom:6px;color:var(--ink)">Save your current cart as a standing order</div>
-      <div style="font-size:13px;margin-bottom:12px">Next time, add it all back with one tap from this tab.</div>
-      <input id="standing_name" placeholder="e.g. Tuesday delivery" style="margin-bottom:10px">
-      <button class="btn btn-primary" onclick="saveStandingOrder()">Save current cart as standing order</button>
+      <div style="font-size:13px">Standing orders are saved templates — build a cart on <b>Your order</b> and use "Save as a standing order" there. Come back here any time to add one straight back to your cart.</div>
     </div>
     ${list || `<div class="card empty-state">No standing orders saved yet.</div>`}
   `;
