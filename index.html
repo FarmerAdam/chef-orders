@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.44"; // pre-launch build; 1.0 = first real launch — true recurring standing orders (auto-placed weekly, skip/deactivate, DB-scheduled)
+const APP_VERSION = "0.45"; // pre-launch build; 1.0 = first real launch — edit/cancel orders before cutoff (chef), full edit/delete (staff)
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -991,12 +991,52 @@ async function submitOrder(){
 
 /* ----- ORDER HISTORY ----- */
 const STATUS_PILL = { pending:"warn", confirmed:"good", fulfilled:"good", cancelled:"danger" };
+let editingOrderId=null;
+function orderIsEditable(o){
+  return o.requested_date===currentDeliveryThursday() && (o.status==='pending'||o.status==='confirmed');
+}
 function renderHistoryView(){
   if(!chefOrders.length) return `<div class="card empty-state">No orders yet — place your first one from the board.</div>`;
   return chefOrders.map(o=>{
     const items=o.mn_order_items||[];
     const total=items.reduce((s,i)=> s + (i.unit_price_per_kg ? i.unit_price_per_kg*i.qty_kg : 0), 0);
     const fee=o.delivery_fee??0;
+    const editable=orderIsEditable(o);
+    if(editingOrderId===o.id){
+      const board=computeAvailabilityBoard();
+      return `<div class="card" style="margin-bottom:14px;border:1.5px solid var(--warn)">
+        <div class="order-card-top">
+          <div style="font-weight:700">Editing order for ${new Date(o.requested_date).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}</div>
+          <span class="pill ${STATUS_PILL[o.status]||'muted'}">${o.status}</span>
+        </div>
+        <div style="margin-top:10px">
+          ${items.map(i=>{
+            const avail=board.find(e=>e.species===i.species);
+            const overAvail=avail && i.qty_kg>avail.displayHigh;
+            return `<div class="order-item-row" style="display:block">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span>${i.species}</span>
+                <span style="display:flex;align-items:center;gap:8px">
+                  <input type="number" min="0" step="0.5" class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="updateOrderItemQty('${i.id}','${o.id}',this.value)">
+                  <button onclick="removeOrderItem('${i.id}','${o.id}')" style="color:var(--danger);border:none;background:none">✕</button>
+                </span>
+              </div>
+              ${overAvail?`<div style="font-size:12px;color:var(--warn);margin-top:2px">More than currently predicted available (~${fmtKg(avail.displayLow)}–${fmtKg(avail.displayHigh)}kg this week) — should still be fine to ask, just flagging it</div>`:''}
+            </div>`;
+          }).join("")}
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+            <select id="add_orderitem_sp_${o.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escSpecies(p.species)}">${p.species}</option>`).join("")}</select>
+            <input type="number" min="0" step="0.5" id="add_orderitem_qty_${o.id}" placeholder="kg" style="width:80px">
+            <button class="btn btn-ghost btn-sm" onclick="addOrderItem('${o.id}')">Add</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" onclick="editingOrderId=null; renderChefTab()">Done editing</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="cancelOrder('${o.id}')">Cancel this order</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:10px">Changes save immediately. You can keep editing until the Tuesday midnight cutoff for this Thursday.</div>
+      </div>`;
+    }
     return `<div class="card" style="margin-bottom:14px">
       <div class="order-card-top">
         <div>
@@ -1014,8 +1054,40 @@ function renderHistoryView(){
       ${o.notes?`<div style="margin-top:10px;font-size:13px;color:var(--muted)">Note for Adam &amp; Em: "${o.notes}"</div>`:''}
       <div class="order-item-row" style="margin-top:6px"><span>Delivery</span><span class="mono">$${fee.toFixed(2)}</span></div>
       <div class="cart-total" style="margin-top:6px"><span>Total</span><span class="mono">$${(total+fee).toFixed(2)}</span></div>
+      ${editable?`<button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="editingOrderId='${o.id}'; renderChefTab()">Edit this order</button>`:''}
     </div>`;
   }).join("");
+}
+
+async function updateOrderItemQty(itemId,orderId,val){
+  const qty=parseFloat(val);
+  if(!qty||qty<=0){ await removeOrderItem(itemId,orderId); return; }
+  await db.from("mn_order_items").update({qty_kg:qty}).eq("id",itemId);
+  await loadChefOnlyData(); renderChefTab();
+}
+async function removeOrderItem(itemId,orderId){
+  await db.from("mn_order_items").delete().eq("id",itemId);
+  await loadChefOnlyData(); renderChefTab();
+}
+async function addOrderItem(orderId){
+  const species=$(`add_orderitem_sp_${orderId}`).value;
+  const qty=parseFloat($(`add_orderitem_qty_${orderId}`).value);
+  if(!species||!qty||qty<=0){ toast("Pick a species and quantity"); return; }
+  const order=chefOrders.find(o=>o.id===orderId);
+  const existing=(order?.mn_order_items||[]).find(i=>i.species===species);
+  const price=priceFor(species);
+  if(existing){ await db.from("mn_order_items").update({qty_kg:existing.qty_kg+qty}).eq("id",existing.id); }
+  else { await db.from("mn_order_items").insert({order_id:orderId, species, qty_kg:qty, unit_price_per_kg: price?.unit_price_per_kg??null, is_special_request: !!price?.special_only}); }
+  toast("Added");
+  await loadChefOnlyData(); renderChefTab();
+}
+async function cancelOrder(orderId){
+  if(!confirm("Cancel this order? Adam & Em will see it as cancelled.")) return;
+  const {error}=await db.from("mn_orders").update({status:'cancelled'}).eq("id",orderId);
+  if(error){ toast("Couldn't cancel: "+error.message); return; }
+  editingOrderId=null;
+  toast("Order cancelled");
+  await loadChefOnlyData(); renderChefTab();
 }
 
 /* ----- STANDING ORDERS ----- */
@@ -1266,6 +1338,32 @@ function renderOrdersView(){
     const items=o.mn_order_items||[];
     const total=items.reduce((s,i)=> s + (i.unit_price_per_kg ? i.unit_price_per_kg*i.qty_kg : 0), 0);
     const fee=o.delivery_fee??0;
+    if(editingOrderId===o.id){
+      return `<div class="card" style="margin-bottom:14px;border:1.5px solid var(--warn)">
+        <div class="order-card-top">
+          <div style="font-weight:700">Editing — ${o.mn_chefs?.business_name||'Unknown chef'}, for ${new Date(o.requested_date).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}</div>
+          <span class="pill ${STATUS_PILL[o.status]||'muted'}">${o.status}</span>
+        </div>
+        <div style="margin-top:10px">
+          ${items.map(i=>`<div class="order-item-row">
+            <span>${i.species}${i.is_special_request?' · quote requested':''}</span>
+            <span style="display:flex;align-items:center;gap:8px">
+              <input type="number" min="0" step="0.5" class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="staffUpdateOrderItemQty('${i.id}','${o.id}',this.value)">
+              <button onclick="staffRemoveOrderItem('${i.id}','${o.id}')" style="color:var(--danger);border:none;background:none">✕</button>
+            </span>
+          </div>`).join("")}
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+            <select id="add_staff_orderitem_sp_${o.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escSpecies(p.species)}">${p.species}</option>`).join("")}</select>
+            <input type="number" min="0" step="0.5" id="add_staff_orderitem_qty_${o.id}" placeholder="kg" style="width:80px">
+            <button class="btn btn-ghost btn-sm" onclick="staffAddOrderItem('${o.id}')">Add</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" onclick="editingOrderId=null; renderStaffApp()">Done editing</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="staffDeleteOrder('${o.id}')">Delete order</button>
+        </div>
+      </div>`;
+    }
     return `<div class="card" style="margin-bottom:14px">
       <div class="order-card-top">
         <div>
@@ -1283,6 +1381,10 @@ function renderOrdersView(){
       ${o.notes?`<div style="margin-top:10px;font-size:13px;color:var(--muted)">Note: ${o.notes}</div>`:''}
       <div class="order-item-row" style="margin-top:6px"><span>Delivery</span><span class="mono">$${fee.toFixed(2)}</span></div>
       <div class="cart-total" style="margin-top:6px"><span>Total</span><span class="mono">$${(total+fee).toFixed(2)}</span></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="editingOrderId='${o.id}'; renderStaffApp()">Edit</button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="staffDeleteOrder('${o.id}')">Delete</button>
+      </div>
     </div>`;
   }).join("") : `<div class="card empty-state">No orders yet.</div>`;
 
@@ -1324,6 +1426,37 @@ async function updateOrderStatus(id, status){
   await loadStaffOnlyData();
   renderStaffApp();
   toast("Order updated");
+}
+async function staffUpdateOrderItemQty(itemId,orderId,val){
+  const qty=parseFloat(val);
+  if(!qty||qty<=0){ await staffRemoveOrderItem(itemId,orderId); return; }
+  await db.from("mn_order_items").update({qty_kg:qty}).eq("id",itemId);
+  await loadStaffOnlyData(); renderStaffApp();
+}
+async function staffRemoveOrderItem(itemId,orderId){
+  await db.from("mn_order_items").delete().eq("id",itemId);
+  await loadStaffOnlyData(); renderStaffApp();
+}
+async function staffAddOrderItem(orderId){
+  const species=$(`add_staff_orderitem_sp_${orderId}`).value;
+  const qty=parseFloat($(`add_staff_orderitem_qty_${orderId}`).value);
+  if(!species||!qty||qty<=0){ toast("Pick a species and quantity"); return; }
+  const order=allOrders.find(o=>o.id===orderId);
+  const existing=(order?.mn_order_items||[]).find(i=>i.species===species);
+  const price=priceFor(species);
+  if(existing){ await db.from("mn_order_items").update({qty_kg:existing.qty_kg+qty}).eq("id",existing.id); }
+  else { await db.from("mn_order_items").insert({order_id:orderId, species, qty_kg:qty, unit_price_per_kg: price?.unit_price_per_kg??null, is_special_request: !!price?.special_only}); }
+  toast("Added");
+  await loadStaffOnlyData(); renderStaffApp();
+}
+async function staffDeleteOrder(orderId){
+  if(!confirm("Delete this order entirely? This can't be undone.")) return;
+  await db.from("mn_order_items").delete().eq("order_id",orderId);
+  const {error}=await db.from("mn_orders").delete().eq("id",orderId);
+  if(error){ toast("Couldn't delete: "+error.message); return; }
+  editingOrderId=null;
+  toast("Order deleted");
+  await loadStaffOnlyData(); renderStaffApp();
 }
 
 /* ----- CHEFS (onboarding) ----- */
