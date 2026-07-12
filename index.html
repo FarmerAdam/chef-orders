@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.46"; // pre-launch build; 1.0 = first real launch — fixed timezone bug: auto-selected Thursday/today were computing off UTC, landing a day early in Melbourne
+const APP_VERSION = "0.47"; // pre-launch build; 1.0 = first real launch — availability board no longer shows species with fruiting blocks but no yield data as a hollow 0kg row
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -697,7 +697,11 @@ function renderChefTab(){
 
 /* ----- THE BOARD (signature element) ----- */
 function renderBoardView(){
-  const board = computeAvailabilityBoard();
+  // Same filter Farmer's Selection already applies: a species with fruiting
+  // blocks but no yield-default row (and no recent actual harvest) predicts
+  // to a flat 0kg — that's a data gap, not real availability, so don't show
+  // it as a hollow "0kg" row on the board.
+  const board = computeAvailabilityBoard().filter(e => e.displayConservative > 0);
   const specials = priceList.filter(p=>p.special_only);
 
   if(!board.length){
