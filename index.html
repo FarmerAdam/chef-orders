@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.49"; // pre-launch build; 1.0 = first real launch — species lookups (yield/price/preference) now match regardless of case/apostrophe/whitespace differences; added the Mixed Oyster equal-split box (Snow White, Warm White, Blue, Chocolate)
+const APP_VERSION = "0.50"; // pre-launch build; 1.0 = first real launch — Farmers Selection & Mixed Oyster box sizes are now chef-adjustable (free-form kg input, 1-8kg range) instead of fixed at 3kg
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -721,6 +721,14 @@ let chefOrders=[], chefStandingOrders=[], chefSpeciesPrefs=[];
 let cart={}; // species -> qty_kg
 let cartNotes={}; // species -> per-item note
 let orderNote=""; // order-level note
+// Box sizes are chef-adjustable per session (not persisted) — a box
+// physically only fits so much, so the range is hardcoded rather than
+// admin-configurable for now; revisit if that ever needs to change.
+const BOX_KG_MIN=1, BOX_KG_MAX=8;
+let fsBoxKg=3, moBoxKg=3;
+function clampBoxKg(v){ const n=parseFloat(v); return (isNaN(n)||n<=0) ? 3 : Math.min(BOX_KG_MAX, Math.max(BOX_KG_MIN, n)); }
+function setFsBoxKg(v){ fsBoxKg=clampBoxKg(v); renderChefTab(); }
+function setMoBoxKg(v){ moBoxKg=clampBoxKg(v); renderChefTab(); }
 
 async function loadChefOnlyData(){
   if(!myChefRow) return;
@@ -841,7 +849,7 @@ function renderBoardView(){
 
 /* ----- Farmers Selection box card ----- */
 function renderFarmersSelectionCard(){
-  const box = computeFarmersSelection(3);
+  const box = computeFarmersSelection(fsBoxKg);
   if(!box.length) return "";
   const rows = box.map(item=>`
     <div class="fs-item">
@@ -859,9 +867,11 @@ function renderFarmersSelectionCard(){
       <div class="fs-card-head">
         <div>
           <div class="section-title" style="margin-bottom:4px">Farmers Selection</div>
-          <div class="fs-tag">Our pick of the best 3kg this week — leaning into what you usually order</div>
+          <div class="fs-tag">Our pick this week — leaning into what you usually order</div>
         </div>
-        <span class="pill good">3kg box</span>
+        <span class="pill good" style="display:flex;align-items:center;gap:3px">
+          <input type="number" min="${BOX_KG_MIN}" max="${BOX_KG_MAX}" step="0.5" value="${fsBoxKg}" style="width:38px;border:none;background:transparent;text-align:right;font:inherit;color:inherit;padding:0" onchange="setFsBoxKg(this.value)">kg box
+        </span>
       </div>
       <div class="fs-items">${rows}</div>
       <div class="cart-total"><span>Box total</span><span class="mono">${hasQuote?'+ quote items · ':''}$${price.toFixed(2)}</span></div>
@@ -871,7 +881,7 @@ function renderFarmersSelectionCard(){
   `;
 }
 function addFarmersSelectionToCart(){
-  const box = computeFarmersSelection(3);
+  const box = computeFarmersSelection(fsBoxKg);
   for(const item of box) cart[item.species] = (cart[item.species]||0) + item.qty_kg;
   toast("Farmers Selection added to your order");
   setChefTab('cart');
@@ -882,7 +892,7 @@ function addFarmersSelectionToCart(){
    variety with nothing available reads as an explicit "N/A" rather than
    quietly vanishing — makes it obvious why the split isn't even 4-ways. */
 function renderMixedOysterCard(){
-  const box = computeMixedOysterBox(3);
+  const box = computeMixedOysterBox(moBoxKg);
   if(!box.length) return "";
   const bySpecies = {}; box.forEach(i=>bySpecies[i.species]=i.qty_kg);
   const rows = MIXED_OYSTER_SPECIES.map(sp=>{
@@ -905,7 +915,9 @@ function renderMixedOysterCard(){
           <div class="section-title" style="margin-bottom:4px">Mixed Oyster</div>
           <div class="fs-tag">Equal split of whichever oyster varieties are available this week</div>
         </div>
-        <span class="pill good">3kg box</span>
+        <span class="pill good" style="display:flex;align-items:center;gap:3px">
+          <input type="number" min="${BOX_KG_MIN}" max="${BOX_KG_MAX}" step="0.5" value="${moBoxKg}" style="width:38px;border:none;background:transparent;text-align:right;font:inherit;color:inherit;padding:0" onchange="setMoBoxKg(this.value)">kg box
+        </span>
       </div>
       <div class="fs-items">${rows}</div>
       <div class="cart-total"><span>Box total</span><span class="mono">${hasQuote?'+ quote items · ':''}$${price.toFixed(2)}</span></div>
@@ -914,7 +926,7 @@ function renderMixedOysterCard(){
   `;
 }
 function addMixedOysterToCart(){
-  const box = computeMixedOysterBox(3);
+  const box = computeMixedOysterBox(moBoxKg);
   for(const item of box) cart[item.species] = (cart[item.species]||0) + item.qty_kg;
   toast("Mixed Oyster added to your order");
   setChefTab('cart');
