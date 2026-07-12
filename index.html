@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.47"; // pre-launch build; 1.0 = first real launch — availability board no longer shows species with fruiting blocks but no yield data as a hollow 0kg row
+const APP_VERSION = "0.48"; // pre-launch build; 1.0 = first real launch — availability board now checks readiness against this week's delivery Thursday instead of today, so cohorts that will mature in time for delivery aren't hidden just because they aren't ready the moment the board is viewed
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -520,18 +520,24 @@ function daysSince(dateStr){
   const d = new Date(dateStr); const now = new Date();
   return Math.floor((now - d) / (1000*60*60*24));
 }
+function daysBetweenDates(a,b){
+  return Math.floor((new Date(b) - new Date(a)) / (1000*60*60*24));
+}
 
 /* ----- This week's availability board -----
    For every species with blocks CURRENTLY in 'fruiting', predict a
    conservative kg range from yield defaults. Blend in actual harvest
    weight already logged in the last 7 days (that's real, not predicted).
-   Each fruiting cohort (see fruitingCohorts above) that hasn't been fruiting
-   long enough yet (per species' days_to_harvest_low) is excluded entirely,
-   rather than shown as available before it's actually pickable — other,
-   older cohorts of the same batch can still count if they're ready.
+   Each fruiting cohort (see fruitingCohorts above) is checked against
+   whether it will have matured by THIS WEEK'S DELIVERY THURSDAY (not
+   today) — chefs are ordering ahead of Thursday, so a cohort that isn't
+   pickable yet but will be by delivery day still counts. A cohort that
+   won't even be ready by Thursday is excluded entirely — other, older
+   cohorts of the same batch can still count if they're ready in time.
    Output sorted by total conservative estimate, descending. */
 function computeAvailabilityBoard(){
   const sevenDaysAgo = new Date(Date.now() - 7*24*60*60*1000);
+  const deliveryThu = currentDeliveryThursday();
   const bySpecies = {};
 
   for(const b of batches){
@@ -540,7 +546,7 @@ function computeAvailabilityBoard(){
     const cohorts = fruitingCohorts(b.id);
     let fruitingBlocks = 0;
     for(const c of cohorts){
-      if(yd?.days_to_harvest_low!=null && daysSince(c.date) < yd.days_to_harvest_low) continue; // this cohort isn't ready yet — hide just this portion
+      if(yd?.days_to_harvest_low!=null && daysBetweenDates(c.date, deliveryThu) < yd.days_to_harvest_low) continue; // won't be ready even by this week's delivery — hide just this portion
       fruitingBlocks += c.remaining;
     }
     if(fruitingBlocks<=0) continue;
