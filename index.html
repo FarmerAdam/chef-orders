@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.50"; // pre-launch build; 1.0 = first real launch — Farmers Selection & Mixed Oyster box sizes are now chef-adjustable (free-form kg input, 1-8kg range) instead of fixed at 3kg
+const APP_VERSION = "0.52"; // pre-launch build; 1.0 = first real launch — Farmers Selection is now a bundle SKU too (own flat price, split decided by staff at pack time using the chef's real preferences); any price-list item can now be put "on special" with a temporary override price, admin-toggled in the Prices tab
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -486,6 +486,27 @@ function normalizeSpecies(s){
   return (s||"").toString().trim().toLowerCase().replace(/['’‘`]/g,"").replace(/\s+/g," ");
 }
 function priceFor(species){ const n=normalizeSpecies(species); return priceList.find(p=>normalizeSpecies(p.species)===n) || null; }
+/* A price-list row can be "on special" — a temporary flat override (e.g.
+   Farmers Selection normally $40/kg, $35/kg this week) set by Adam/Em in
+   the Prices tab. This is the ONE place that decides what a species
+   actually costs right now; every live price calculation should go
+   through this rather than reading unit_price_per_kg directly, so a
+   special applies everywhere consistently. Already-placed order items
+   keep whatever they were charged at the time (stored on the order item
+   itself) — this only affects NEW pricing calculations. */
+function effectivePrice(p){
+  if(!p) return null;
+  if(p.on_special && p.special_price_per_kg!=null) return Number(p.special_price_per_kg);
+  return p.unit_price_per_kg ?? null;
+}
+function priceLabelHTML(p){
+  const eff = effectivePrice(p);
+  if(eff==null) return "POA";
+  if(p.on_special && p.special_price_per_kg!=null && p.unit_price_per_kg!=null){
+    return `<span style="text-decoration:line-through;opacity:.55;margin-right:5px">$${Number(p.unit_price_per_kg).toFixed(2)}</span>$${eff.toFixed(2)}/kg`;
+  }
+  return `$${eff.toFixed(2)}/kg`;
+}
 function yieldFor(species){ const n=normalizeSpecies(species); return yieldDefaults.find(y=>normalizeSpecies(y.species)===n) || null; }
 
 /* ----- Block-state accounting, mirrors batch-tracker's own logic -----
@@ -603,6 +624,13 @@ function fmtKg(n){ return (Math.round(n*10)/10).toString(); }
    skewed by the chef's own per-species preference. The preference is a
    reliable structured tag (less/normal/more/none), never inferred from
    free text, so a chef's box never includes something they've excluded.
+   Like Mixed Oyster, this is now a bundle SKU — the chef orders one line
+   ("Farmers Selection, 3kg") at its own flat price, never sees or edits
+   the species breakdown, and the actual mix is decided by staff at pack
+   time. prefLookup defaults to the logged-in chef's own prefFor, but
+   staff pass a per-chef lookup (see prefForChef) so the pack-time
+   suggestion reflects the actual ordering chef's tastes, not whoever's
+   currently logged in.
 
    Safety behaviours built in:
    - 'none' species are fully excluded, never just down-weighted.
@@ -613,8 +641,9 @@ function fmtKg(n){ return (Math.round(n*10)/10).toString(); }
      preference skews the mix without ever making the box monotonous.
    - Rounds to friendly portions (nearest 0.1kg) and re-distributes any
      rounding remainder onto the largest item so the total still hits target. */
-function computeFarmersSelection(targetKg){
+function computeFarmersSelection(targetKg, prefLookup){
   targetKg = targetKg || 3;
+  prefLookup = prefLookup || prefFor;
   const board = computeAvailabilityBoard().filter(e => e.displayConservative > 0);
   if(!board.length) return [];
 
@@ -622,7 +651,7 @@ function computeFarmersSelection(targetKg){
   const CAP_FRACTION = 0.6;
 
   let weighted = board.map(e=>{
-    const pref = prefFor(e.species);
+    const pref = prefLookup(e.species);
     const mult = PREF_MULTIPLIER[pref] ?? 1;
     return { species:e.species, available:e.displayConservative, weight: e.displayConservative * mult, pref };
   }).filter(w => w.weight > 0);
@@ -667,18 +696,19 @@ function computeFarmersSelection(targetKg){
   return items;
 }
 
-/* ----- Mixed Oyster box algorithm -----
-   Same idea as Farmer's Selection but restricted to a fixed set of oyster
-   varieties, and split EQUALLY rather than weighted by abundance or chef
-   preference — the point is a consistent oyster sampler, not a lean into
-   whatever's most abundant. A variety with nothing currently
-   predicted/picked is simply left out (shown as N/A in the box), and its
-   share is redistributed equally across the remaining available oysters.
-
-   Safety behaviour: if a variety has less real availability than its
-   equal share, it's capped at what's actually available and the excess is
-   redistributed equally across the other still-uncapped oysters — never
-   back onto an already-capped one, so the excess can't ping-pong. */
+/* ----- Mixed Oyster suggested split (staff pack-time aid only) -----
+   Mixed Oyster is ordered by chefs as ONE line item at a flat bundle
+   price (its own row in mn_price_list, same as any other species) — the
+   chef never sees or edits a species breakdown, and nothing is decided or
+   locked at order time. This function exists purely so staff can see a
+   live "here's roughly how you could split it" suggestion when they're
+   actually packing the box, computed fresh from whatever's fruiting at
+   that moment — it recomputes differently every time it's called and is
+   never stored against the order.
+   Same equal-split-with-cap-and-redistribute approach as before: a
+   variety with nothing available is left out of the suggestion entirely,
+   and a variety with less than its equal share is capped at what's
+   actually there, with the excess redistributed across the others. */
 const MIXED_OYSTER_SPECIES = ["Snow White Oyster","Warm White Oyster","Blue Oyster","Chocolate Oyster"];
 function computeMixedOysterBox(targetKg){
   targetKg = targetKg || 3;
@@ -714,6 +744,14 @@ function computeMixedOysterBox(targetKg){
   }
   items.sort((a,b)=>b.qty_kg-a.qty_kg);
   return items;
+}
+function anyMixedOysterStockAvailable(){
+  const board = computeAvailabilityBoard();
+  return MIXED_OYSTER_SPECIES.some(sp=>{
+    const n=normalizeSpecies(sp);
+    const e=board.find(x=>normalizeSpecies(x.species)===n);
+    return e && e.displayConservative>0;
+  });
 }
 
 /* ================= CHEF APP ================= */
@@ -786,7 +824,7 @@ function renderBoardView(){
 
   const rows = board.map(e=>{
     const price = priceFor(e.species);
-    const priceLabel = price?.unit_price_per_kg ? `$${price.unit_price_per_kg.toFixed(2)}/kg` : "POA";
+    const priceLabel = priceLabelHTML(price);
     const hasActual = e.actualKgThisWeek>0;
     const barMax = Math.max(e.displayHigh * 1.15, 1); // headroom so the high end isn't flush against the edge
     const lowPct = Math.min(100,(e.displayLow/barMax)*100);
@@ -851,38 +889,29 @@ function renderBoardView(){
 function renderFarmersSelectionCard(){
   const box = computeFarmersSelection(fsBoxKg);
   if(!box.length) return "";
-  const rows = box.map(item=>`
-    <div class="fs-item">
-      <span class="dot" style="background:${speciesColor(item.species)}"></span>
-      <span class="fs-item-name">${item.species}</span>
-      <span class="mono fs-item-qty">${fmtKg(item.qty_kg)}kg</span>
-    </div>`).join("");
-  let price=0, hasQuote=false;
-  for(const item of box){
-    const p=priceFor(item.species);
-    if(p?.unit_price_per_kg) price += p.unit_price_per_kg*item.qty_kg; else hasQuote=true;
-  }
+  const price = priceFor("Farmers Selection");
+  const lineTotal = effectivePrice(price)!=null ? effectivePrice(price)*fsBoxKg : null;
   return `
     <div class="card fs-card">
       <div class="fs-card-head">
         <div>
           <div class="section-title" style="margin-bottom:4px">Farmers Selection</div>
-          <div class="fs-tag">Our pick this week — leaning into what you usually order</div>
+          <div class="fs-tag">Our pick of what's peaking this week, leaning into what you usually order. We choose the exact mix when we pack it.</div>
         </div>
-        <span class="pill good" style="display:flex;align-items:center;gap:3px">
-          <input type="number" min="${BOX_KG_MIN}" max="${BOX_KG_MAX}" step="0.5" value="${fsBoxKg}" style="width:38px;border:none;background:transparent;text-align:right;font:inherit;color:inherit;padding:0" onchange="setFsBoxKg(this.value)">kg box
-        </span>
+        <span class="board-price mono">${priceLabelHTML(price)}</span>
       </div>
-      <div class="fs-items">${rows}</div>
-      <div class="cart-total"><span>Box total</span><span class="mono">${hasQuote?'+ quote items · ':''}$${price.toFixed(2)}</span></div>
-      <button class="btn btn-primary" onclick="addFarmersSelectionToCart()">Add box to your order</button>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+        <input type="number" min="${BOX_KG_MIN}" max="${BOX_KG_MAX}" step="0.5" value="${fsBoxKg}" style="width:70px" onchange="setFsBoxKg(this.value)">
+        <span style="color:var(--muted);font-size:13px">kg</span>
+      </div>
+      ${lineTotal!=null?`<div class="cart-total" style="margin-top:10px"><span>Total</span><span class="mono">$${lineTotal.toFixed(2)}</span></div>`:""}
+      <button class="btn btn-primary" style="margin-top:10px" onclick="addFarmersSelectionToCart()">Add ${fmtKg(fsBoxKg)}kg to your order</button>
       <button class="btn-ghost btn-sm" style="margin-top:8px" onclick="setChefTab('prefs')">Tune your preferences →</button>
     </div>
   `;
 }
 function addFarmersSelectionToCart(){
-  const box = computeFarmersSelection(fsBoxKg);
-  for(const item of box) cart[item.species] = (cart[item.species]||0) + item.qty_kg;
+  cart["Farmers Selection"] = (cart["Farmers Selection"]||0) + fsBoxKg;
   toast("Farmers Selection added to your order");
   setChefTab('cart');
 }
@@ -892,42 +921,30 @@ function addFarmersSelectionToCart(){
    variety with nothing available reads as an explicit "N/A" rather than
    quietly vanishing — makes it obvious why the split isn't even 4-ways. */
 function renderMixedOysterCard(){
-  const box = computeMixedOysterBox(moBoxKg);
-  if(!box.length) return "";
-  const bySpecies = {}; box.forEach(i=>bySpecies[i.species]=i.qty_kg);
-  const rows = MIXED_OYSTER_SPECIES.map(sp=>{
-    const qty = bySpecies[sp];
-    return `<div class="fs-item">
-      <span class="dot" style="background:${speciesColor(sp)}"></span>
-      <span class="fs-item-name">${sp}</span>
-      <span class="mono fs-item-qty">${qty?fmtKg(qty)+"kg":'<span style="color:var(--muted)">N/A</span>'}</span>
-    </div>`;
-  }).join("");
-  let price=0, hasQuote=false;
-  for(const item of box){
-    const p=priceFor(item.species);
-    if(p?.unit_price_per_kg) price += p.unit_price_per_kg*item.qty_kg; else hasQuote=true;
-  }
+  if(!anyMixedOysterStockAvailable()) return "";
+  const price = priceFor("Mixed Oyster");
+  const priceLabel = price?.unit_price_per_kg ? `$${price.unit_price_per_kg.toFixed(2)}/kg` : "POA";
+  const lineTotal = price?.unit_price_per_kg ? price.unit_price_per_kg*moBoxKg : null;
   return `
     <div class="card fs-card">
       <div class="fs-card-head">
         <div>
           <div class="section-title" style="margin-bottom:4px">Mixed Oyster</div>
-          <div class="fs-tag">Equal split of whichever oyster varieties are available this week</div>
+          <div class="fs-tag">A mix of Snow White, Warm White, Blue &amp; Chocolate Oyster — whichever are freshest. We pick the exact split when we pack it.</div>
         </div>
-        <span class="pill good" style="display:flex;align-items:center;gap:3px">
-          <input type="number" min="${BOX_KG_MIN}" max="${BOX_KG_MAX}" step="0.5" value="${moBoxKg}" style="width:38px;border:none;background:transparent;text-align:right;font:inherit;color:inherit;padding:0" onchange="setMoBoxKg(this.value)">kg box
-        </span>
+        <span class="board-price mono">${priceLabel}</span>
       </div>
-      <div class="fs-items">${rows}</div>
-      <div class="cart-total"><span>Box total</span><span class="mono">${hasQuote?'+ quote items · ':''}$${price.toFixed(2)}</span></div>
-      <button class="btn btn-primary" onclick="addMixedOysterToCart()">Add box to your order</button>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:12px">
+        <input type="number" min="${BOX_KG_MIN}" max="${BOX_KG_MAX}" step="0.5" value="${moBoxKg}" style="width:70px" onchange="setMoBoxKg(this.value)">
+        <span style="color:var(--muted);font-size:13px">kg</span>
+      </div>
+      ${lineTotal!=null?`<div class="cart-total" style="margin-top:10px"><span>Total</span><span class="mono">$${lineTotal.toFixed(2)}</span></div>`:""}
+      <button class="btn btn-primary" style="margin-top:10px" onclick="addMixedOysterToCart()">Add ${fmtKg(moBoxKg)}kg to your order</button>
     </div>
   `;
 }
 function addMixedOysterToCart(){
-  const box = computeMixedOysterBox(moBoxKg);
-  for(const item of box) cart[item.species] = (cart[item.species]||0) + item.qty_kg;
+  cart["Mixed Oyster"] = (cart["Mixed Oyster"]||0) + moBoxKg;
   toast("Mixed Oyster added to your order");
   setChefTab('cart');
 }
@@ -1011,13 +1028,14 @@ function renderCartView(){
   let total=0, hasQuoteItems=false;
   const rows = items.map(([species,qty])=>{
     const price=priceFor(species);
-    const lineTotal = price?.unit_price_per_kg ? price.unit_price_per_kg*qty : null;
+    const eff = effectivePrice(price);
+    const lineTotal = eff!=null ? eff*qty : null;
     if(lineTotal!=null) total+=lineTotal; else hasQuoteItems=true;
     const noteVal = cartNotes[species]||'';
     return `<div class="cart-row">
       <div>
         <div style="font-weight:600">${species}</div>
-        <div style="font-size:12px;color:var(--muted)">${price?.unit_price_per_kg?`$${price.unit_price_per_kg.toFixed(2)}/kg`:'Price on request'}</div>
+        <div style="font-size:12px;color:var(--muted)">${eff!=null?priceLabelHTML(price):'Price on request'}</div>
       </div>
       <div class="cart-row-controls">
         <input type="number" min="0" step="0.5" class="qty-input" value="${qty}" oninput="setCartQty('${escSpecies(species)}', this.value); renderChefTab()">
@@ -1103,7 +1121,7 @@ async function submitOrder(){
 
   const itemRows = items.map(([species,qty])=>{
     const price=priceFor(species);
-    return { order_id:order.id, species, qty_kg:qty, unit_price_per_kg: price?.unit_price_per_kg ?? null, is_special_request: !!price?.special_only, note: cartNotes[species]?.trim()||null };
+    return { order_id:order.id, species, qty_kg:qty, unit_price_per_kg: effectivePrice(price), is_special_request: !!price?.special_only, note: cartNotes[species]?.trim()||null };
   });
   const {error:itemErr} = await db.from("mn_order_items").insert(itemRows);
   if(itemErr){ toast("Order created but items failed to save: "+itemErr.message); return; }
@@ -1202,7 +1220,7 @@ async function addOrderItem(orderId){
   const existing=(order?.mn_order_items||[]).find(i=>i.species===species);
   const price=priceFor(species);
   if(existing){ await db.from("mn_order_items").update({qty_kg:existing.qty_kg+qty}).eq("id",existing.id); }
-  else { await db.from("mn_order_items").insert({order_id:orderId, species, qty_kg:qty, unit_price_per_kg: price?.unit_price_per_kg??null, is_special_request: !!price?.special_only}); }
+  else { await db.from("mn_order_items").insert({order_id:orderId, species, qty_kg:qty, unit_price_per_kg: effectivePrice(price), is_special_request: !!price?.special_only}); }
   toast("Added");
   await loadChefOnlyData(); renderChefTab();
 }
@@ -1368,18 +1386,27 @@ async function setSpeciesPref(species, preference){
 }
 
 /* ================= STAFF APP ================= */
-let allOrders=[], allStandingOrders=[], chefRequests=[];
+let allOrders=[], allStandingOrders=[], chefRequests=[], allChefPrefs=[];
 let staffTab="summary";
 
 async function loadStaffOnlyData(){
-  const [c, o, r] = await Promise.all([
+  const [c, o, r, sp] = await Promise.all([
     db.from("mn_chefs").select("*").order("business_name"),
     db.from("mn_orders").select("*, mn_order_items(*), mn_chefs(business_name)").order("created_at",{ascending:false}),
     db.from("mn_chef_requests").select("*").eq("status","pending").order("created_at",{ascending:true}),
+    db.from("mn_chef_species_prefs").select("*"),
   ]);
   chefs = c.data||[];
   allOrders = o.data||[];
   chefRequests = r.data||[];
+  allChefPrefs = sp.data||[];
+}
+/* Same shape as prefFor, but for a specific chef rather than whoever's
+   logged in — used only by staff when computing a pack-time Farmers
+   Selection suggestion for a particular chef's order. */
+function prefForChef(chefId, species){
+  const n=normalizeSpecies(species);
+  return allChefPrefs.find(p=>p.chef_id===chefId && normalizeSpecies(p.species)===n)?.preference || 'normal';
 }
 
 function renderStaffApp(){
@@ -1444,6 +1471,18 @@ function copySummary(text){
 }
 
 /* ----- ORDERS (staff manage all, log on chef's behalf) ----- */
+function mixedOysterHintHTML(qtyKg){
+  const split = computeMixedOysterBox(qtyKg);
+  if(!split.length) return `<div style="font-size:12px;color:var(--warn);margin-top:2px">↳ Nothing currently fruiting across the 4 oyster varieties — double check before packing</div>`;
+  const txt = split.map(s=>`${fmtKg(s.qty_kg)}kg ${s.species}`).join(", ");
+  return `<div style="font-size:12px;color:var(--muted);margin-top:2px">↳ Suggested split right now: ${txt} <span style="opacity:.7">— updates live, decide the real mix at pack time</span></div>`;
+}
+function farmersSelectionHintHTML(qtyKg, chefId){
+  const split = computeFarmersSelection(qtyKg, sp=>prefForChef(chefId, sp));
+  if(!split.length) return `<div style="font-size:12px;color:var(--warn);margin-top:2px">↳ Nothing currently fruiting — double check before packing</div>`;
+  const txt = split.map(s=>`${fmtKg(s.qty_kg)}kg ${s.species}`).join(", ");
+  return `<div style="font-size:12px;color:var(--muted);margin-top:2px">↳ Suggested mix for this chef right now: ${txt} <span style="opacity:.7">— updates live, decide the real mix at pack time</span></div>`;
+}
 function renderOrdersView(){
   const logFormHtml = `
     <div class="card" style="margin-bottom:18px">
@@ -1470,12 +1509,16 @@ function renderOrdersView(){
           <span class="pill ${STATUS_PILL[o.status]||'muted'}">${o.status}</span>
         </div>
         <div style="margin-top:10px">
-          ${items.map(i=>`<div class="order-item-row">
-            <span>${i.species}${i.is_special_request?' · quote requested':''}</span>
-            <span style="display:flex;align-items:center;gap:8px">
-              <input type="number" min="0" step="0.5" class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="staffUpdateOrderItemQty('${i.id}','${o.id}',this.value)">
-              <button onclick="staffRemoveOrderItem('${i.id}','${o.id}')" style="color:var(--danger);border:none;background:none">✕</button>
-            </span>
+          ${items.map(i=>`<div class="order-item-row" style="display:block">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span>${i.species}${i.is_special_request?' · quote requested':''}</span>
+              <span style="display:flex;align-items:center;gap:8px">
+                <input type="number" min="0" step="0.5" class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="staffUpdateOrderItemQty('${i.id}','${o.id}',this.value)">
+                <button onclick="staffRemoveOrderItem('${i.id}','${o.id}')" style="color:var(--danger);border:none;background:none">✕</button>
+              </span>
+            </div>
+            ${i.species==='Mixed Oyster'?mixedOysterHintHTML(i.qty_kg):''}
+            ${i.species==='Farmers Selection'?farmersSelectionHintHTML(i.qty_kg, o.chef_id):''}
           </div>`).join("")}
           <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
             <select id="add_staff_orderitem_sp_${o.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escSpecies(p.species)}">${p.species}</option>`).join("")}</select>
@@ -1502,6 +1545,8 @@ function renderOrdersView(){
       <div style="margin-top:10px">${items.map(i=>`<div class="order-item-row" style="display:block">
         <div style="display:flex;justify-content:space-between"><span>${i.species}${i.is_special_request?' · quote requested':''}</span><span class="mono">${fmtKg(i.qty_kg)}kg${i.unit_price_per_kg?` · $${(i.unit_price_per_kg*i.qty_kg).toFixed(2)}`:''}</span></div>
         ${i.note?`<div style="font-size:12px;color:var(--warn);margin-top:2px">↳ "${i.note}"</div>`:''}
+        ${i.species==='Mixed Oyster'?mixedOysterHintHTML(i.qty_kg):''}
+        ${i.species==='Farmers Selection'?farmersSelectionHintHTML(i.qty_kg, o.chef_id):''}
       </div>`).join("")}</div>
       ${o.notes?`<div style="margin-top:10px;font-size:13px;color:var(--muted)">Note: ${o.notes}</div>`:''}
       <div class="order-item-row" style="margin-top:6px"><span>Delivery</span><span class="mono">$${fee.toFixed(2)}</span></div>
@@ -1539,7 +1584,7 @@ async function staffSubmitOrder(){
   const chef=chefs.find(c=>c.id===chef_id);
   const {data:order,error}=await db.from("mn_orders").insert({chef_id, order_source:'staff', status:'confirmed', requested_date: currentDeliveryThursday(), delivery_fee: deliveryFeeFor(chef)}).select().single();
   if(error){ toast("Couldn't save order: "+error.message); return; }
-  const rows=staffDraftOrder.map(l=>({order_id:order.id, species:l.species, qty_kg:l.qty_kg, unit_price_per_kg: priceFor(l.species)?.unit_price_per_kg ?? null}));
+  const rows=staffDraftOrder.map(l=>({order_id:order.id, species:l.species, qty_kg:l.qty_kg, unit_price_per_kg: effectivePrice(priceFor(l.species))}));
   await db.from("mn_order_items").insert(rows);
   staffDraftOrder=[];
   toast("Order logged");
@@ -1570,7 +1615,7 @@ async function staffAddOrderItem(orderId){
   const existing=(order?.mn_order_items||[]).find(i=>i.species===species);
   const price=priceFor(species);
   if(existing){ await db.from("mn_order_items").update({qty_kg:existing.qty_kg+qty}).eq("id",existing.id); }
-  else { await db.from("mn_order_items").insert({order_id:orderId, species, qty_kg:qty, unit_price_per_kg: price?.unit_price_per_kg??null, is_special_request: !!price?.special_only}); }
+  else { await db.from("mn_order_items").insert({order_id:orderId, species, qty_kg:qty, unit_price_per_kg: effectivePrice(price), is_special_request: !!price?.special_only}); }
   toast("Added");
   await loadStaffOnlyData(); renderStaffApp();
 }
@@ -1735,14 +1780,31 @@ function renderPricesView(){
   return `<div class="card">
     <div class="section-title">Standard wholesale prices</div>
     ${priceList.map(p=>`
-      <div class="price-row">
-        <span style="flex:1">${p.species}</span>
+      <div class="price-row" style="flex-wrap:wrap">
+        <span style="flex:1;min-width:120px">${p.species}</span>
         <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:12px;color:var(--muted)"><input type="checkbox" style="width:auto" ${p.special_only?'checked':''} onchange="updatePriceField('${escSpecies(p.species)}','special_only',this.checked)"> Quote only</label>
         <span class="mono">$</span>
         <input type="number" min="0" step="0.5" class="qty-input" style="width:80px" value="${p.unit_price_per_kg??''}" placeholder="POA" onchange="updatePriceField('${escSpecies(p.species)}','unit_price_per_kg',this.value?parseFloat(this.value):null)">
         <span style="font-size:12px;color:var(--muted)">/kg</span>
+        <label style="display:flex;align-items:center;gap:6px;margin:0 0 0 10px;font-size:12px;color:var(--warn)"><input type="checkbox" style="width:auto" ${p.on_special?'checked':''} onchange="updatePriceField('${escSpecies(p.species)}','on_special',this.checked)"> On special</label>
+        ${p.on_special?`<span class="mono">$</span><input type="number" min="0" step="0.5" class="qty-input" style="width:80px" value="${p.special_price_per_kg??''}" placeholder="special $" onchange="updatePriceField('${escSpecies(p.species)}','special_price_per_kg',this.value?parseFloat(this.value):null)"><span style="font-size:12px;color:var(--muted)">/kg this week</span>`:''}
       </div>`).join("")}
+    <div class="price-row" style="margin-top:10px;padding-top:14px;border-top:1px solid var(--line)">
+      <input id="new_price_species" placeholder="Add a species or bundle, e.g. Mixed Oyster" style="flex:1">
+      <button class="btn btn-ghost btn-sm" onclick="addPriceSpecies()">+ Add</button>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:6px">Bundles like Mixed Oyster or Farmers Selection aren't tied to a real batch species — add them here with their own flat $/kg and they'll behave like any other priced item. Tick "On special" to run a temporary price for that item — untick it any time to snap back to the normal $/kg, which is never overwritten.</div>
   </div>`;
+}
+async function addPriceSpecies(){
+  const species = ($("new_price_species")||{}).value?.trim();
+  if(!species){ toast("Enter a name first"); return; }
+  if(priceList.some(p=>normalizeSpecies(p.species)===normalizeSpecies(species))){ toast(`"${species}" is already in the price list`); return; }
+  const {error} = await db.from("mn_price_list").insert({species, unit_price_per_kg:null, special_only:false, on_special:false});
+  if(error){ toast("Couldn't add: "+error.message); return; }
+  await loadSharedData();
+  renderStaffApp();
+  toast(`Added ${species} — set its price above`);
 }
 async function updatePriceField(species, field, value){
   await db.from("mn_price_list").update({[field]:value, updated_at:new Date().toISOString()}).eq("species",species);
