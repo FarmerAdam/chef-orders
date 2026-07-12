@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.53"; // pre-launch build; 1.0 = first real launch — removed "None for me" from chef taste preferences; Farmers Selection can no longer be fully excluded from a species, only weighted down, since the whole point is moving what's peaking
+const APP_VERSION = "0.54"; // pre-launch build; 1.0 = first real launch — new staff-only Market tab: automatic weekly grown/wholesale/available-for-market rollup from existing data, plus lightweight market-run logging (kg taken optional) with expected-vs-actual revenue variance per run and per staff member
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -1388,20 +1388,24 @@ async function setSpeciesPref(species, preference){
 }
 
 /* ================= STAFF APP ================= */
-let allOrders=[], allStandingOrders=[], chefRequests=[], allChefPrefs=[];
+let allOrders=[], allStandingOrders=[], chefRequests=[], allChefPrefs=[], marketRuns=[], farmCosts=[];
 let staffTab="summary";
 
 async function loadStaffOnlyData(){
-  const [c, o, r, sp] = await Promise.all([
+  const [c, o, r, sp, mr, fc] = await Promise.all([
     db.from("mn_chefs").select("*").order("business_name"),
     db.from("mn_orders").select("*, mn_order_items(*), mn_chefs(business_name)").order("created_at",{ascending:false}),
     db.from("mn_chef_requests").select("*").eq("status","pending").order("created_at",{ascending:true}),
     db.from("mn_chef_species_prefs").select("*"),
+    db.from("mn_market_runs").select("*").order("run_date",{ascending:false}),
+    db.from("mn_costs").select("species,retail_price_kg"), // Batch Tracker's table — read-only here, just for the retail price used in market variance
   ]);
   chefs = c.data||[];
   allOrders = o.data||[];
   chefRequests = r.data||[];
   allChefPrefs = sp.data||[];
+  marketRuns = mr.data||[];
+  farmCosts = fc.data||[];
 }
 /* Same shape as prefFor, but for a specific chef rather than whoever's
    logged in — used only by staff when computing a pack-time Farmers
@@ -1416,6 +1420,7 @@ function renderStaffApp(){
     <div class="tabs">
       <button class="tab ${staffTab==='summary'?'active':''}" onclick="setStaffTab('summary')">This week</button>
       <button class="tab ${staffTab==='orders'?'active':''}" onclick="setStaffTab('orders')">Orders ${pendingCount()?`(${pendingCount()})`:''}</button>
+      <button class="tab ${staffTab==='market'?'active':''}" onclick="setStaffTab('market')">Market</button>
       <button class="tab ${staffTab==='chefs'?'active':''}" onclick="setStaffTab('chefs')">Chefs ${chefRequests.length?`(${chefRequests.length})`:''}</button>
       <button class="tab ${staffTab==='prices'?'active':''}" onclick="setStaffTab('prices')">Prices</button>
       <button class="tab ${staffTab==='yields'?'active':''}" onclick="setStaffTab('yields')">Yield defaults</button>
@@ -1431,6 +1436,7 @@ function renderStaffTab(){
   const el=$("staffTabContent");
   if(staffTab==="summary") el.innerHTML = renderSummaryView();
   else if(staffTab==="orders") el.innerHTML = renderOrdersView();
+  else if(staffTab==="market") el.innerHTML = renderMarketView();
   else if(staffTab==="chefs") el.innerHTML = renderChefsView();
   else if(staffTab==="prices") el.innerHTML = renderPricesView();
   else if(staffTab==="yields") el.innerHTML = renderYieldsView();
@@ -1470,6 +1476,167 @@ function renderSummaryView(){
 }
 function copySummary(text){
   navigator.clipboard?.writeText(text).then(()=>toast("Copied — paste it straight into the email")).catch(()=>toast("Couldn't copy — select and copy manually"));
+}
+
+/* ----- MARKET (grown vs sold wholesale vs taken to market, reconciled against what came home) -----
+   Two independent pieces:
+   1. A trailing-7-day yield rollup computed entirely from existing data
+      (mn_harvests, mn_order_items) — no new logging required. Tells you
+      how much of what you grew went wholesale vs is theoretically left
+      over for market.
+   2. Market runs — a lightweight log staff can fill in per market day.
+      kg_taken is optional (weigh-out doesn't always happen yet); when
+      it's present, we snapshot a blended retail $/kg at the time the run
+      is logged (from Batch Tracker's mn_costs.retail_price_kg, weighted
+      by what was actually harvested that week) so the expected-revenue
+      figure for a past run stays stable even as prices/harvests change
+      later. Variance = expected − actual (card+cash), only shown when
+      kg_taken is known; runs without kg still record revenue. */
+function computeWeeklySummary(){
+  const sevenDaysAgo = new Date(Date.now() - 7*24*60*60*1000);
+  const grownKg = harvests.filter(h=>new Date(h.harvest_date)>=sevenDaysAgo).reduce((s,h)=>s+(h.weight_g||0)/1000,0);
+  const wholesaleKg = allOrders
+    .filter(o=>o.status!=='cancelled' && new Date(o.requested_date)>=sevenDaysAgo)
+    .reduce((s,o)=> s + (o.mn_order_items||[]).reduce((ss,i)=>ss+(Number(i.qty_kg)||0),0), 0);
+  return { grownKg, wholesaleKg, availableKg: Math.max(0, grownKg-wholesaleKg) };
+}
+/* Weighted average retail $/kg across whatever was actually harvested in
+   the 7 days leading up to asOfDate, weighted by each species' share of
+   that harvest. Species with no retail price set in Batch Tracker's Costs
+   tab are simply excluded from the weighting (can't price what isn't
+   priced). Falls back to a flat average of whatever retail prices exist
+   at all if nothing harvested that week has one set. Returns null if
+   there's truly no retail pricing data anywhere yet. */
+function blendedRetailPricePerKg(asOfDate){
+  const ref = asOfDate ? new Date(asOfDate) : new Date();
+  const weekAgo = new Date(ref.getTime() - 7*24*60*60*1000);
+  const bySpecies = {};
+  for(const h of harvests){
+    const hd = new Date(h.harvest_date);
+    if(hd < weekAgo || hd > ref) continue;
+    const b = batches.find(x=>x.id===h.batch_id);
+    if(!b) continue;
+    bySpecies[b.species] = (bySpecies[b.species]||0) + (h.weight_g||0)/1000;
+  }
+  let weightedSum=0, totalKg=0;
+  for(const sp in bySpecies){
+    const n=normalizeSpecies(sp);
+    const c = farmCosts.find(x=>normalizeSpecies(x.species)===n);
+    if(c?.retail_price_kg){ weightedSum += bySpecies[sp]*Number(c.retail_price_kg); totalKg += bySpecies[sp]; }
+  }
+  if(totalKg>0) return weightedSum/totalKg;
+  const vals = farmCosts.map(c=>Number(c.retail_price_kg)).filter(v=>v>0);
+  return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : null;
+}
+
+function renderMarketView(){
+  const wk = computeWeeklySummary();
+  const summaryHtml = `
+    <div class="card" style="margin-bottom:18px">
+      <div class="section-title">This week's yield</div>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:10px">
+        <div><div class="mono" style="font-size:22px;font-weight:700">${fmtKg(wk.grownKg)}kg</div><div style="font-size:12px;color:var(--muted)">Grown (last 7 days)</div></div>
+        <div><div class="mono" style="font-size:22px;font-weight:700">${fmtKg(wk.wholesaleKg)}kg</div><div style="font-size:12px;color:var(--muted)">Sold wholesale</div></div>
+        <div><div class="mono" style="font-size:22px;font-weight:700;color:var(--good)">${fmtKg(wk.availableKg)}kg</div><div style="font-size:12px;color:var(--muted)">Left over for market</div></div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:10px">Per-species accuracy is a little fuzzy wherever Farmers Selection or Mixed Oyster boxes are involved — those record a total kg, not which species went in. Totals are solid either way.</div>
+    </div>
+  `;
+
+  const logFormHtml = `
+    <div class="card" style="margin-bottom:18px">
+      <div class="section-title">Log a market run</div>
+      <div class="row2" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+        <div style="flex:1;min-width:120px"><label for="mkt_staff">Staff</label><input id="mkt_staff" placeholder="e.g. Em"></div>
+        <div style="flex:1;min-width:120px"><label for="mkt_market">Market</label><input id="mkt_market" placeholder="e.g. Sunday Farmers Market"></div>
+        <div style="flex:1;min-width:120px"><label for="mkt_date">Date</label><input id="mkt_date" type="date" value="${todayISO()}"></div>
+      </div>
+      <div class="row2" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px">
+        <div style="flex:1;min-width:100px"><label for="mkt_kg">Kg taken (optional)</label><input id="mkt_kg" type="number" min="0" step="0.5" placeholder="if weighed"></div>
+        <div style="flex:1;min-width:100px"><label for="mkt_card">Card total</label><input id="mkt_card" type="number" min="0" step="0.01" value="0"></div>
+        <div style="flex:1;min-width:100px"><label for="mkt_cash">Cash total</label><input id="mkt_cash" type="number" min="0" step="0.01" value="0"></div>
+      </div>
+      <label for="mkt_notes" style="margin-top:10px">Notes (optional)</label>
+      <input id="mkt_notes" placeholder="e.g. rained out early, packed up at 11">
+      <button class="btn btn-primary" style="margin-top:14px" onclick="addMarketRun()">Save run</button>
+    </div>
+  `;
+
+  const runs = marketRuns;
+  const runsHtml = runs.length ? runs.map(r=>{
+    const actual = Number(r.card_total||0)+Number(r.cash_total||0);
+    const hasKg = r.kg_taken!=null && r.expected_price_per_kg!=null;
+    const expected = hasKg ? Number(r.kg_taken)*Number(r.expected_price_per_kg) : null;
+    const variance = expected!=null ? expected-actual : null;
+    return `<div class="card" style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">
+        <div>
+          <div style="font-weight:700">${esc(r.staff_name)||'—'} · ${esc(r.market_name)||'Market'}</div>
+          <div style="font-size:12px;color:var(--muted)">${new Date(r.run_date).toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short'})}${r.kg_taken!=null?` · ${fmtKg(Number(r.kg_taken))}kg taken`:' · kg not logged'}</div>
+        </div>
+        <button class="btn-ghost btn-sm" style="color:var(--danger)" onclick="deleteMarketRun('${r.id}')">✕</button>
+      </div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:10px">
+        <div><span class="mono">$${actual.toFixed(2)}</span> <span style="font-size:12px;color:var(--muted)">actual (card+cash)</span></div>
+        ${expected!=null?`<div><span class="mono">$${expected.toFixed(2)}</span> <span style="font-size:12px;color:var(--muted)">expected</span></div>`:''}
+        ${variance!=null?`<div><span class="mono" style="color:${variance>0?'var(--danger)':'var(--good)'};font-weight:700">${variance>0?'−':'+'}$${Math.abs(variance).toFixed(2)}</span> <span style="font-size:12px;color:var(--muted)">variance</span></div>`:''}
+      </div>
+      ${r.notes?`<div style="font-size:12px;color:var(--muted);margin-top:8px">↳ "${esc(r.notes)}"</div>`:''}
+    </div>`;
+  }).join("") : `<div class="card empty-state">No market runs logged yet.</div>`;
+
+  // per-staff rollup, only across runs where kg (and so variance) is known
+  const byStaff = {};
+  for(const r of runs){
+    const name = (r.staff_name||'Unknown').trim() || 'Unknown';
+    if(!byStaff[name]) byStaff[name] = { runs:0, actual:0, expected:0, knownRuns:0 };
+    const actual = Number(r.card_total||0)+Number(r.cash_total||0);
+    byStaff[name].runs++; byStaff[name].actual += actual;
+    if(r.kg_taken!=null && r.expected_price_per_kg!=null){
+      byStaff[name].expected += Number(r.kg_taken)*Number(r.expected_price_per_kg);
+      byStaff[name].knownRuns++;
+    }
+  }
+  const staffRows = Object.entries(byStaff).map(([name,s])=>{
+    const variance = s.knownRuns>0 ? s.expected-s.actual : null;
+    return `<div class="order-item-row">
+      <span>${esc(name)} <span style="color:var(--muted);font-size:12px">(${s.runs} run${s.runs===1?'':'s'})</span></span>
+      <span class="mono">$${s.actual.toFixed(2)} actual${variance!=null?` · <span style="color:${variance>0?'var(--danger)':'var(--good)'}">${variance>0?'−':'+'}$${Math.abs(variance).toFixed(2)}</span>`:''}</span>
+    </div>`;
+  }).join("");
+  const rollupHtml = staffRows ? `<div class="card" style="margin-bottom:18px"><div class="section-title">By staff member</div>${staffRows}</div>` : '';
+
+  return summaryHtml + logFormHtml + rollupHtml + runsHtml;
+}
+
+async function addMarketRun(){
+  const staff_name = ($("mkt_staff").value||'').trim();
+  const market_name = ($("mkt_market").value||'').trim();
+  const run_date = $("mkt_date").value || todayISO();
+  const kgVal = $("mkt_kg").value;
+  const kg_taken = kgVal ? parseFloat(kgVal) : null;
+  const card_total = parseFloat($("mkt_card").value)||0;
+  const cash_total = parseFloat($("mkt_cash").value)||0;
+  const notes = ($("mkt_notes").value||'').trim() || null;
+  if(!staff_name){ toast("Enter who ran the market"); return; }
+  // snapshot the blended retail price now, so this run's expected-revenue figure
+  // doesn't drift later if prices change or more harvests get logged
+  const expected_price_per_kg = kg_taken!=null ? blendedRetailPricePerKg(run_date) : null;
+  const {error} = await db.from("mn_market_runs").insert({
+    staff_name, market_name: market_name||null, run_date, kg_taken, expected_price_per_kg,
+    card_total, cash_total, notes
+  });
+  if(error){ toast("Couldn't save: "+error.message); return; }
+  $("mkt_staff").value=''; $("mkt_market").value=''; $("mkt_kg").value=''; $("mkt_card").value='0'; $("mkt_cash").value='0'; $("mkt_notes").value='';
+  await loadStaffOnlyData();
+  renderStaffApp();
+  toast("Market run saved");
+}
+async function deleteMarketRun(id){
+  if(!confirm("Delete this market run?")) return;
+  await db.from("mn_market_runs").delete().eq("id",id);
+  await loadStaffOnlyData();
+  renderStaffApp();
 }
 
 /* ----- ORDERS (staff manage all, log on chef's behalf) ----- */
