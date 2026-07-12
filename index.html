@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.52"; // pre-launch build; 1.0 = first real launch — Farmers Selection is now a bundle SKU too (own flat price, split decided by staff at pack time using the chef's real preferences); any price-list item can now be put "on special" with a temporary override price, admin-toggled in the Prices tab
+const APP_VERSION = "0.53"; // pre-launch build; 1.0 = first real launch — removed "None for me" from chef taste preferences; Farmers Selection can no longer be fully excluded from a species, only weighted down, since the whole point is moving what's peaking
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -633,10 +633,12 @@ function fmtKg(n){ return (Math.round(n*10)/10).toString(); }
    currently logged in.
 
    Safety behaviours built in:
-   - 'none' species are fully excluded, never just down-weighted.
-   - If every available species is weighted to ~0 (e.g. everything marked
-     'none' except one tiny batch), fall back to an even split across
-     whatever's left rather than producing an empty or lopsided box.
+   - Nothing can be fully excluded — Farmers Selection exists to move
+     stock that's peaking, so even a species a chef likes least still gets
+     a small look-in rather than a hard zero. ('none' is legacy data from
+     before that option was removed; treated as a low weight, not zero.)
+   - If every available species is weighted low, fall back to an even
+     split across whatever's left rather than producing a lopsided box.
    - A single species is capped at 60% of the box so a strong "more"
      preference skews the mix without ever making the box monotonous.
    - Rounds to friendly portions (nearest 0.1kg) and re-distributes any
@@ -647,7 +649,7 @@ function computeFarmersSelection(targetKg, prefLookup){
   const board = computeAvailabilityBoard().filter(e => e.displayConservative > 0);
   if(!board.length) return [];
 
-  const PREF_MULTIPLIER = { less: 0.5, normal: 1, more: 2, none: 0 };
+  const PREF_MULTIPLIER = { less: 0.5, normal: 1, more: 2, none: 0.2 }; // 'none' is legacy data (option removed) — kept low rather than zero so nothing's fully excluded
   const CAP_FRACTION = 0.6;
 
   let weighted = board.map(e=>{
@@ -1351,7 +1353,7 @@ function useStandingOrder(id){
 }
 
 /* ----- PREFERENCES (drives Farmers Selection box) ----- */
-const PREF_LABELS = { less:"Less", normal:"Normal", more:"More", none:"None for me" };
+const PREF_LABELS = { less:"Less", normal:"Normal", more:"More" };
 function renderPrefsView(){
   const species = priceList.map(p=>p.species).sort();
   const rows = species.map(sp=>{
@@ -1359,7 +1361,7 @@ function renderPrefsView(){
     return `<div class="pref-row">
       <span>${sp}</span>
       <div class="pref-toggle">
-        ${['none','less','normal','more'].map(opt=>`
+        ${['less','normal','more'].map(opt=>`
           <button class="pref-btn ${current===opt?'active':''}" onclick="setSpeciesPref('${escSpecies(sp)}','${opt}')">${PREF_LABELS[opt]}</button>
         `).join("")}
       </div>
@@ -1368,7 +1370,7 @@ function renderPrefsView(){
   return `
     <div class="card" style="margin-bottom:14px">
       <div class="section-title">Your taste preferences</div>
-      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">This shapes your Farmers Selection box each week — mark something "more" to see more of it, "less" to ease back, or "none for me" to leave it out entirely. Doesn't affect anything you order yourself from the board.</p>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">This shapes your Farmers Selection box each week — mark something "more" to see more of it, or "less" to ease back. Farmers Selection is our pick of what's peaking, so nothing can be fully excluded — it's still a good way to move stock that's ready. Doesn't affect anything you order yourself from the board.</p>
       ${rows}
     </div>
   `;
