@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.48"; // pre-launch build; 1.0 = first real launch — availability board now checks readiness against this week's delivery Thursday instead of today, so cohorts that will mature in time for delivery aren't hidden just because they aren't ready the moment the board is viewed
+const APP_VERSION = "0.49"; // pre-launch build; 1.0 = first real launch — species lookups (yield/price/preference) now match regardless of case/apostrophe/whitespace differences; added the Mixed Oyster equal-split box (Snow White, Warm White, Blue, Chocolate)
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -475,8 +475,18 @@ async function loadSharedData(){
   priceList = pl.data||[]; yieldDefaults = yd.data||[];
 }
 
-function priceFor(species){ return priceList.find(p=>p.species===species) || null; }
-function yieldFor(species){ return yieldDefaults.find(y=>y.species===species) || null; }
+/* Species names get typed by hand in a few different places (batch entry,
+   yield defaults, price list) and even a small difference — a curly vs
+   straight apostrophe, extra whitespace, different casing — makes an exact
+   string match silently fail, which is exactly what was hiding real yield
+   data for one species (looked like a 0kg prediction bug, was actually a
+   spelling mismatch). Normalize before comparing so that class of typo
+   can't break the match again. */
+function normalizeSpecies(s){
+  return (s||"").toString().trim().toLowerCase().replace(/['’‘`]/g,"").replace(/\s+/g," ");
+}
+function priceFor(species){ const n=normalizeSpecies(species); return priceList.find(p=>normalizeSpecies(p.species)===n) || null; }
+function yieldFor(species){ const n=normalizeSpecies(species); return yieldDefaults.find(y=>normalizeSpecies(y.species)===n) || null; }
 
 /* ----- Block-state accounting, mirrors batch-tracker's own logic -----
    A block's current state is derived by replaying its movements.
@@ -657,6 +667,55 @@ function computeFarmersSelection(targetKg){
   return items;
 }
 
+/* ----- Mixed Oyster box algorithm -----
+   Same idea as Farmer's Selection but restricted to a fixed set of oyster
+   varieties, and split EQUALLY rather than weighted by abundance or chef
+   preference — the point is a consistent oyster sampler, not a lean into
+   whatever's most abundant. A variety with nothing currently
+   predicted/picked is simply left out (shown as N/A in the box), and its
+   share is redistributed equally across the remaining available oysters.
+
+   Safety behaviour: if a variety has less real availability than its
+   equal share, it's capped at what's actually available and the excess is
+   redistributed equally across the other still-uncapped oysters — never
+   back onto an already-capped one, so the excess can't ping-pong. */
+const MIXED_OYSTER_SPECIES = ["Snow White Oyster","Warm White Oyster","Blue Oyster","Chocolate Oyster"];
+function computeMixedOysterBox(targetKg){
+  targetKg = targetKg || 3;
+  const board = computeAvailabilityBoard();
+  const avail = MIXED_OYSTER_SPECIES.map(sp=>{
+    const n = normalizeSpecies(sp);
+    const e = board.find(x=>normalizeSpecies(x.species)===n);
+    return { species: sp, available: e ? e.displayConservative : 0 };
+  }).filter(x => x.available > 0);
+  if(!avail.length) return [];
+
+  let shares = avail.map(a=>({ ...a, rawKg:0, capped:false }));
+  for(let iterations=0; iterations<10; iterations++){
+    const active = shares.filter(s=>!s.capped);
+    if(!active.length) break;
+    const cappedTotal = shares.filter(s=>s.capped).reduce((s,x)=>s+x.rawKg,0);
+    const remainingTarget = targetKg - cappedTotal;
+    const equalShare = remainingTarget/active.length;
+    let anyNewlyCapped=false;
+    for(const s of active){
+      if(s.available <= equalShare){ s.rawKg=s.available; s.capped=true; anyNewlyCapped=true; }
+    }
+    if(!anyNewlyCapped){ for(const s of active) s.rawKg = equalShare; break; }
+  }
+
+  let items = shares.filter(s=>s.rawKg >= 0.1).map(s=>({ species:s.species, qty_kg: Math.round(s.rawKg*10)/10, available:s.available }));
+  if(!items.length) return [];
+  const roundedTotal = items.reduce((s,i)=>s+i.qty_kg, 0);
+  const drift = Math.round((targetKg - roundedTotal)*10)/10;
+  if(Math.abs(drift) >= 0.1){
+    items.sort((a,b)=>b.qty_kg-a.qty_kg);
+    items[0].qty_kg = Math.max(0.1, Math.round((items[0].qty_kg+drift)*10)/10);
+  }
+  items.sort((a,b)=>b.qty_kg-a.qty_kg);
+  return items;
+}
+
 /* ================= CHEF APP ================= */
 let chefOrders=[], chefStandingOrders=[], chefSpeciesPrefs=[];
 let cart={}; // species -> qty_kg
@@ -674,7 +733,7 @@ async function loadChefOnlyData(){
   chefStandingOrders = so.data||[];
   chefSpeciesPrefs = sp.data||[];
 }
-function prefFor(species){ return chefSpeciesPrefs.find(p=>p.species===species)?.preference || 'normal'; }
+function prefFor(species){ const n=normalizeSpecies(species); return chefSpeciesPrefs.find(p=>normalizeSpecies(p.species)===n)?.preference || 'normal'; }
 
 function renderChefApp(){
   $("mainContent").innerHTML = `
@@ -770,6 +829,7 @@ function renderBoardView(){
       <p>Predicted from what's currently fruiting in the growing rooms, with picked stock confirmed as it comes in. The dot on each bar is our honest best guess — we'd rather under-promise.</p>
     </div>
     ${renderFarmersSelectionCard()}
+    ${renderMixedOysterCard()}
     <div class="card board-card">${rows}</div>
     ${specialsHtml}
     <div class="sticky-cart-bar ${cartCount()?'show':''}" onclick="setChefTab('cart')">
@@ -814,6 +874,49 @@ function addFarmersSelectionToCart(){
   const box = computeFarmersSelection(3);
   for(const item of box) cart[item.species] = (cart[item.species]||0) + item.qty_kg;
   toast("Farmers Selection added to your order");
+  setChefTab('cart');
+}
+
+/* ----- Mixed Oyster box card -----
+   Shows all 4 oyster varieties, not just the ones that made the cut, so a
+   variety with nothing available reads as an explicit "N/A" rather than
+   quietly vanishing — makes it obvious why the split isn't even 4-ways. */
+function renderMixedOysterCard(){
+  const box = computeMixedOysterBox(3);
+  if(!box.length) return "";
+  const bySpecies = {}; box.forEach(i=>bySpecies[i.species]=i.qty_kg);
+  const rows = MIXED_OYSTER_SPECIES.map(sp=>{
+    const qty = bySpecies[sp];
+    return `<div class="fs-item">
+      <span class="dot" style="background:${speciesColor(sp)}"></span>
+      <span class="fs-item-name">${sp}</span>
+      <span class="mono fs-item-qty">${qty?fmtKg(qty)+"kg":'<span style="color:var(--muted)">N/A</span>'}</span>
+    </div>`;
+  }).join("");
+  let price=0, hasQuote=false;
+  for(const item of box){
+    const p=priceFor(item.species);
+    if(p?.unit_price_per_kg) price += p.unit_price_per_kg*item.qty_kg; else hasQuote=true;
+  }
+  return `
+    <div class="card fs-card">
+      <div class="fs-card-head">
+        <div>
+          <div class="section-title" style="margin-bottom:4px">Mixed Oyster</div>
+          <div class="fs-tag">Equal split of whichever oyster varieties are available this week</div>
+        </div>
+        <span class="pill good">3kg box</span>
+      </div>
+      <div class="fs-items">${rows}</div>
+      <div class="cart-total"><span>Box total</span><span class="mono">${hasQuote?'+ quote items · ':''}$${price.toFixed(2)}</span></div>
+      <button class="btn btn-primary" onclick="addMixedOysterToCart()">Add box to your order</button>
+    </div>
+  `;
+}
+function addMixedOysterToCart(){
+  const box = computeMixedOysterBox(3);
+  for(const item of box) cart[item.species] = (cart[item.species]||0) + item.qty_kg;
+  toast("Mixed Oyster added to your order");
   setChefTab('cart');
 }
 
