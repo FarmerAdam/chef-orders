@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.54"; // pre-launch build; 1.0 = first real launch — new staff-only Market tab: automatic weekly grown/wholesale/available-for-market rollup from existing data, plus lightweight market-run logging (kg taken optional) with expected-vs-actual revenue variance per run and per staff member
+const APP_VERSION = "0.55"; // pre-launch build; 1.0 = first real launch — This-week summary card now shows the actual delivery Thursday date instead of "For Em's weekly email", and displays actual kg picked so far alongside the predicted range
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -1110,6 +1110,17 @@ function currentDeliveryThursday(){
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
+/* Human label for the summary card header — the actual Thursday this
+   week's prediction is for, e.g. "Thursday 23/07/26". */
+function currentDeliveryThursdayLabel(){
+  const iso = currentDeliveryThursday();
+  const d = new Date(iso+'T00:00:00');
+  const dd = String(d.getDate()).padStart(2,'0');
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const yy = String(d.getFullYear()).slice(-2);
+  return `Thursday ${dd}/${mm}/${yy}`;
+}
+
 async function submitOrder(){
   const items = Object.entries(cart).filter(([,q])=>q>0);
   if(!items.length) return;
@@ -1454,21 +1465,25 @@ function renderSummaryView(){
   const rows = board.map(e=>{
     const demand = demandBySpecies[e.species]||0;
     const low = demand > e.displayConservative;
+    const hasActual = e.actualKgThisWeek>0;
     return `<div class="summary-row">
       <div class="summary-row-left">
         <span class="dot" style="background:${speciesColor(e.species)}"></span>
         <span style="font-weight:700">${e.species}</span>
         ${low?`<span class="pill warn">low stock — ${fmtKg(demand)}kg ordered vs ~${fmtKg(e.displayConservative)}kg likely</span>`:''}
       </div>
-      <div class="mono">${fmtKg(e.displayLow)}–${fmtKg(e.displayHigh)}kg <span style="color:var(--muted)">(~${fmtKg(e.displayConservative)}kg likely)</span></div>
+      <div style="text-align:right">
+        <div class="mono">${fmtKg(e.displayLow)}–${fmtKg(e.displayHigh)}kg <span style="color:var(--muted)">(~${fmtKg(e.displayConservative)}kg likely)</span></div>
+        ${hasActual?`<div class="mono" style="font-size:12px;color:var(--muted)">Picked so far: ${fmtKg(e.actualKgThisWeek)}kg</div>`:''}
+      </div>
     </div>`;
   }).join("");
 
-  const copyText = board.map(e=>`${e.species}: ~${fmtKg(e.displayConservative)}kg (range ${fmtKg(e.displayLow)}–${fmtKg(e.displayHigh)}kg)`).join("\n");
+  const copyText = board.map(e=>`${e.species}: ~${fmtKg(e.displayConservative)}kg (range ${fmtKg(e.displayLow)}–${fmtKg(e.displayHigh)}kg)${e.actualKgThisWeek>0?` — picked so far: ${fmtKg(e.actualKgThisWeek)}kg`:''}`).join("\n");
 
   return `
     <div class="card" style="margin-bottom:18px">
-      <div class="section-title">For Em's weekly email</div>
+      <div class="section-title">${currentDeliveryThursdayLabel()}</div>
       ${rows || '<div class="empty-state">Nothing fruiting right now.</div>'}
       <button class="btn btn-ghost" style="margin-top:14px" onclick="copySummary(\`${copyText.replace(/`/g,'')}\`)">Copy as text</button>
     </div>
