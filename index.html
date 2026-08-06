@@ -533,7 +533,21 @@ function batchStateCounts(batch){
    assume FIFO: whatever's left fruiting is depleted from the earliest-
    arrived cohort first, since in practice the earliest-fruiting blocks are
    the ones that get picked/cleared first anyway. Returns each still-standing
-   cohort with its own arrival date and remaining count. */
+   cohort with its own arrival date, remaining count, and whether it's
+   already had a harvest logged against it.
+
+   alreadyFlushed exists because mn_yield_defaults' yield_kg_per_block range
+   is calibrated for a full FIRST flush only (see batch-tracker's saveHarvest
+   comment — real second flushes are legitimately much smaller), but a block
+   commonly sits in 'fruiting' through 2-3 flushes before moving to
+   'complete'. Without this, the availability board kept projecting a full
+   fresh first-flush's worth of kg for blocks that had already given up
+   their first flush, weeks after the fact — the actual source of the
+   inflated numbers. Same no-per-block-IDs limitation as above, so this is
+   attributed per cohort (date window), not per physical block: a harvest
+   counts as "this cohort's" if it landed between this cohort's arrival and
+   the next cohort's arrival (or now, for the most recent cohort) — same
+   FIFO-by-date assumption already used for the outflow depletion above. */
 function fruitingCohorts(batchId){
   const inflow = movements.filter(m=>m.batch_id===batchId && m.to_state==="fruiting")
     .sort((a,b)=> a.move_date < b.move_date ? -1 : 1)
@@ -544,6 +558,12 @@ function fruitingCohorts(batchId){
     if(outflow<=0) break;
     const take = Math.min(c.remaining, outflow);
     c.remaining -= take; outflow -= take;
+  }
+  const batchHarvestDates = harvests.filter(h=>h.batch_id===batchId).map(h=>h.harvest_date).sort();
+  for(let i=0;i<inflow.length;i++){
+    const windowStart = inflow[i].date;
+    const windowEnd = i+1<inflow.length ? inflow[i+1].date : null;
+    inflow[i].alreadyFlushed = batchHarvestDates.some(hd => hd>=windowStart && (windowEnd===null || hd<windowEnd));
   }
   return inflow.filter(c=>c.remaining>0);
 }
@@ -565,7 +585,14 @@ function daysBetweenDates(a,b){
    pickable yet but will be by delivery day still counts. A cohort that
    won't even be ready by Thursday is excluded entirely — other, older
    cohorts of the same batch can still count if they're ready in time.
-   Output sorted by total conservative estimate, descending. */
+   A cohort that's already had a harvest logged (alreadyFlushed) is also
+   excluded from the kg prediction — yield_kg_per_block is a first-flush
+   number, so projecting it again for blocks that already gave up their
+   first flush is what was inflating this board. We don't model second-
+   flush yield at all (no data for it), so those blocks just drop out of
+   the prediction entirely — undercounting a genuine second flush is the
+   conservative direction to be wrong in, same as everywhere else on this
+   board. Output sorted by total conservative estimate, descending. */
 function computeAvailabilityBoard(){
   const sevenDaysAgo = new Date(Date.now() - 7*24*60*60*1000);
   const deliveryThu = currentDeliveryThursday();
@@ -578,6 +605,7 @@ function computeAvailabilityBoard(){
     let fruitingBlocks = 0;
     for(const c of cohorts){
       if(yd?.days_to_harvest_low!=null && daysBetweenDates(c.date, deliveryThu) < yd.days_to_harvest_low) continue; // won't be ready even by this week's delivery — hide just this portion
+      if(c.alreadyFlushed) continue; // already gave up its first flush — yield_kg_per_block would double-count it
       fruitingBlocks += c.remaining;
     }
     if(fruitingBlocks<=0) continue;
