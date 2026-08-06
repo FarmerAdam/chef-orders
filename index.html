@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.56"; // pre-launch build; 1.0 = first real launch — Mansfield/Benalla courier now delivers Wednesday (was Thursday for every zone) with self-service chef account creation; availability board no longer double-counts blocks that already gave up a first flush
+const APP_VERSION = "0.57"; // pre-launch build; 1.0 = first real launch — Market tab's "sold wholesale" no longer counts future-dated orders (e.g. next week's) into this week's rollup
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -1693,10 +1693,15 @@ function copySummary(text){
       later. Variance = expected − actual (card+cash), only shown when
       kg_taken is known; runs without kg still record revenue. */
 function computeWeeklySummary(){
-  const sevenDaysAgo = new Date(Date.now() - 7*24*60*60*1000);
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7*24*60*60*1000);
   const grownKg = harvests.filter(h=>new Date(h.harvest_date)>=sevenDaysAgo).reduce((s,h)=>s+(h.weight_g||0)/1000,0);
+  // allOrders holds every order ever (loadStaffOnlyData has no date filter),
+  // including ones pinned to a future delivery date - unlike harvests, which
+  // can't be dated in the future, orders need an explicit upper bound too or
+  // next week's (and every future week's) order bleeds into "this week".
   const wholesaleKg = allOrders
-    .filter(o=>o.status!=='cancelled' && new Date(o.requested_date)>=sevenDaysAgo)
+    .filter(o=>o.status!=='cancelled' && new Date(o.requested_date)>=sevenDaysAgo && new Date(o.requested_date)<=now)
     .reduce((s,o)=> s + (o.mn_order_items||[]).reduce((ss,i)=>ss+(Number(i.qty_kg)||0),0), 0);
   return { grownKg, wholesaleKg, availableKg: Math.max(0, grownKg-wholesaleKg) };
 }
