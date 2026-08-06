@@ -189,7 +189,7 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 
     <p class="login-note" id="staffToggleNote">
       New chef? <button class="btn-ghost" style="padding:6px 12px;font-size:12px" onclick="showRequestForm()">Request access</button><br><br>
-      Staff? <button class="btn-ghost" style="padding:6px 12px;font-size:12px" onclick="showStaffLogin()">Sign in with password</button>
+      Been given a password? <button class="btn-ghost" style="padding:6px 12px;font-size:12px" onclick="showStaffLogin()">Sign in with password</button>
     </p>
 
     <div id="requestFormWrap" class="hidden" style="margin-top:18px;text-align:left">
@@ -956,8 +956,14 @@ function escSpecies(s){ return s.replace(/'/g,"\\'"); }
 /* Delivery fees, GST-inclusive. Only two tiers today — add more here if a
    new remote area comes up rather than building a full postcode map. */
 const DELIVERY_FEES = { standard: 10.00, remote_courier: 22.00 };
-const DELIVERY_ZONE_LABELS = { standard: "Standard ($10 inc. GST)", remote_courier: "Mansfield/Benalla courier ($22 inc. GST)" };
+const DELIVERY_ZONE_LABELS = { standard: "Standard, Thursday delivery ($10 inc. GST)", remote_courier: "Mansfield/Benalla courier, Wednesday delivery ($22 inc. GST)" };
 function deliveryFeeFor(chef){ return DELIVERY_FEES[chef?.delivery_zone] ?? DELIVERY_FEES.standard; }
+// Which weekday each zone delivers on (0=Sun..6=Sat) - added 2026-08-06
+// alongside the Mansfield/Benalla courier route moving to Wednesday.
+// Cutoff is always 2 days before delivery for every zone, same relative
+// lead time the original Thursday/Tuesday-midnight pattern already used.
+const ZONE_DELIVERY_WEEKDAY = { standard: 4, remote_courier: 3 }; // Thu, Wed
+const CUTOFF_LEAD_DAYS = 2;
 
 // Stable colour per species so the board has visual rhythm without being garish.
 const SPECIES_PALETTE = {
@@ -994,7 +1000,7 @@ function requestSpecialQuote(species){
 
 /* ----- CART / CHECKOUT ----- */
 function pendingOrderStatusHTML(){
-  const thu = currentDeliveryThursday();
+  const thu = currentDeliveryThursday(myChefRow?.delivery_zone);
   const thuLabel=new Date(thu).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'short'});
   const existing = chefOrders.find(o=>o.requested_date===thu && o.status!=='cancelled');
   if(existing){
@@ -1048,14 +1054,15 @@ function renderCartView(){
     </div>`;
   }).join("");
   const deliveryFee = deliveryFeeFor(myChefRow);
-  const existingForThisWeek = chefOrders.find(o=>o.requested_date===currentDeliveryThursday() && o.status!=='cancelled');
+  const nextDeliveryWeekday = new Date(currentDeliveryThursday(myChefRow?.delivery_zone)+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long'});
+  const existingForThisWeek = chefOrders.find(o=>o.requested_date===currentDeliveryThursday(myChefRow?.delivery_zone) && o.status!=='cancelled');
   const activeStanding = chefStandingOrders.find(s=>s.active);
 
   return `
     <div class="card">
       <div class="section-title">Your order</div>
       ${activeStanding?`<div class="note-banner" style="margin-bottom:14px;border-color:var(--warn)">You already have a standing order ("${activeStanding.name}") — would you like to modify that instead? <button class="btn-ghost btn-sm" style="border:none;text-decoration:underline;padding:0" onclick="setChefTab('standing')">Go to Standing Orders →</button></div>`
-        :existingForThisWeek?`<div class="note-banner" style="margin-bottom:14px;border-color:var(--warn)">You already have an order in for this Thursday. Placing this will add a <b>separate, second order</b> for the same delivery — not change the existing one.</div>`:''}
+        :existingForThisWeek?`<div class="note-banner" style="margin-bottom:14px;border-color:var(--warn)">You already have an order in for this ${nextDeliveryWeekday}. Placing this will add a <b>separate, second order</b> for the same delivery — not change the existing one.</div>`:''}
       ${rows}
       <div class="order-item-row" style="padding:12px 0;border-bottom:1px solid var(--cream)">
         <span>Delivery</span><span class="mono">$${deliveryFee.toFixed(2)}</span>
@@ -1078,47 +1085,54 @@ function renderCartView(){
 }
 let useCustomDeliveryDate=false;
 function renderDeliveryDateChoice(){
-  const thu=currentDeliveryThursday();
+  const thu=currentDeliveryThursday(myChefRow?.delivery_zone);
   const thuLabel=new Date(thu).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'short'});
+  const weekdayWord=new Date(thu+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long'});
   if(!useCustomDeliveryDate){
     return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <button class="btn btn-primary btn-sm" disabled>This Thursday (${thuLabel})</button>
+      <button class="btn btn-primary btn-sm" disabled>This ${weekdayWord} (${thuLabel})</button>
       <button class="btn-ghost btn-sm" style="border:none;text-decoration:underline" onclick="useCustomDeliveryDate=true; renderChefTab()">Need a different date?</button>
     </div>
     <input type="hidden" id="order_date" value="${thu}">`;
   }
   return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     <input type="date" id="order_date" value="${thu}" style="width:auto">
-    <button class="btn-ghost btn-sm" style="border:none;text-decoration:underline" onclick="useCustomDeliveryDate=false; renderChefTab()">Use this Thursday instead</button>
+    <button class="btn-ghost btn-sm" style="border:none;text-decoration:underline" onclick="useCustomDeliveryDate=false; renderChefTab()">Use this ${weekdayWord} instead</button>
   </div>
   <div style="font-size:12px;color:var(--muted);margin-top:6px">We deliver Thursdays — pick a different date only for a special one-off request, and check with Adam &amp; Em first.</div>`;
 }
 function setCartNote(species, val){ cartNotes[species] = val; }
 
-/* Deliveries are always Thursday, with a hard cutoff at the end of the
-   preceding Tuesday (i.e. ordering closes going into Wednesday). Once that
-   cutoff passes, the "current" delivery date rolls forward to the following
-   Thursday automatically — chefs are never shown a Thursday whose window
-   has already closed. */
-function currentDeliveryThursday(){
+/* Deliveries are always the zone's fixed weekday (Thursday for standard,
+   Wednesday for remote_courier as of 2026-08-06 - see ZONE_DELIVERY_WEEKDAY),
+   with a hard cutoff CUTOFF_LEAD_DAYS before that. Once cutoff passes, the
+   "current" delivery date rolls forward to the following week automatically
+   - chefs/staff are never shown a delivery window that's already closed.
+   zone defaults to 'standard' (unchanged Thursday/Tuesday-midnight behaviour)
+   when no zone is known, e.g. the board-wide availability estimate below,
+   which stays a single conservative value rather than being computed
+   separately per zone. */
+function currentDeliveryThursday(zone){
+  const targetDay = ZONE_DELIVERY_WEEKDAY[zone] ?? ZONE_DELIVERY_WEEKDAY.standard;
   const now = new Date();
   const d = new Date(now); d.setHours(0,0,0,0);
-  const day = d.getDay(); // 0=Sun..6=Sat, Thursday=4
-  d.setDate(d.getDate() + ((4-day+7)%7)); // roll forward to the upcoming (or today's) Thursday
-  const cutoff = new Date(d); cutoff.setDate(cutoff.getDate()-1); // Wednesday 00:00 = the moment Tuesday's cutoff passes
-  if(now >= cutoff) d.setDate(d.getDate()+7); // this week's window closed — push to next Thursday
+  const day = d.getDay();
+  d.setDate(d.getDate() + ((targetDay-day+7)%7)); // roll forward to the upcoming (or today's) delivery weekday
+  const cutoff = new Date(d); cutoff.setDate(cutoff.getDate()-CUTOFF_LEAD_DAYS);
+  if(now >= cutoff) d.setDate(d.getDate()+7); // this week's window closed — push to next week
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
-/* Human label for the summary card header — the actual Thursday this
-   week's prediction is for, e.g. "Thursday 23/07/26". */
-function currentDeliveryThursdayLabel(){
-  const iso = currentDeliveryThursday();
+/* Human label for summary headers — the actual delivery date this week's
+   prediction is for, e.g. "Thursday 23/07/26" or "Wednesday 22/07/26". */
+function currentDeliveryThursdayLabel(zone){
+  const iso = currentDeliveryThursday(zone);
   const d = new Date(iso+'T00:00:00');
+  const weekday = d.toLocaleDateString('en-AU', {weekday:'long'});
   const dd = String(d.getDate()).padStart(2,'0');
   const mm = String(d.getMonth()+1).padStart(2,'0');
   const yy = String(d.getFullYear()).slice(-2);
-  return `Thursday ${dd}/${mm}/${yy}`;
+  return `${weekday} ${dd}/${mm}/${yy}`;
 }
 
 async function submitOrder(){
@@ -1149,7 +1163,7 @@ async function submitOrder(){
 const STATUS_PILL = { pending:"warn", confirmed:"good", fulfilled:"good", cancelled:"danger" };
 let editingOrderId=null;
 function orderIsEditable(o){
-  return o.requested_date===currentDeliveryThursday() && (o.status==='pending'||o.status==='confirmed');
+  return o.requested_date===currentDeliveryThursday(myChefRow?.delivery_zone) && (o.status==='pending'||o.status==='confirmed');
 }
 function renderHistoryView(){
   if(!chefOrders.length) return `<div class="card empty-state">No orders yet — place your first one from the board.</div>`;
@@ -1248,7 +1262,7 @@ async function cancelOrder(orderId){
 
 /* ----- STANDING ORDERS ----- */
 function renderStandingView(){
-  const thu = currentDeliveryThursday();
+  const thu = currentDeliveryThursday(myChefRow?.delivery_zone);
   const thuLabel = new Date(thu).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'short'});
   const list = chefStandingOrders.map(so=>{
     const items = so.mn_standing_order_items||[];
@@ -1363,6 +1377,145 @@ function useStandingOrder(id){
   setChefTab('cart');
 }
 
+/* ----- STAFF: standing orders on a chef's behalf ----- */
+let staffStandingChefId=null, staffStandingDraft=[];
+function renderStaffStandingView(){
+  if(!staffStandingChefId && chefs.length) staffStandingChefId = chefs[0].id;
+  const chef = chefs.find(c=>c.id===staffStandingChefId);
+  const chefOptions = chefs.map(c=>`<option value="${c.id}" ${c.id===staffStandingChefId?'selected':''}>${c.business_name}</option>`).join("");
+  const sosForChef = allStandingOrders.filter(so=>so.chef_id===staffStandingChefId);
+  const thu = currentDeliveryThursday(chef?.delivery_zone);
+  const thuLabel = new Date(thu).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'short'});
+
+  const list = sosForChef.map(so=>{
+    const items = so.mn_standing_order_items||[];
+    const isActive = !!so.active;
+    const isSkipping = so.skip_date === thu;
+    return `<div class="card" style="margin-bottom:14px${isActive?';border:1.5px solid var(--good)':''}">
+      <div class="order-card-top">
+        <div>
+          <div style="font-weight:700">${so.name}</div>
+          ${isActive?`<div style="font-size:12px;color:var(--good)">Active recurring order${isSkipping?` — skipping ${thuLabel}`:''}</div>`:''}
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${isActive
+            ? `<button class="btn btn-ghost btn-sm" onclick="staffDeactivateStandingOrder('${so.id}')">Deactivate</button>`
+            : `<button class="btn btn-primary btn-sm" onclick="staffActivateStandingOrder('${staffStandingChefId}','${so.id}')">Make this their recurring order</button>`}
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        ${items.map(i=>`<div class="order-item-row">
+          <span>${i.species}</span>
+          <span style="display:flex;align-items:center;gap:8px">
+            <input type="number" min="0" step="0.5" class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="staffUpdateStandingItem('${i.id}',this.value)">
+            <button onclick="staffRemoveStandingItem('${i.id}')" style="color:var(--danger);border:none;background:none">✕</button>
+          </span>
+        </div>`).join("")}
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <select id="staff_add_item_sp_${so.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escSpecies(p.species)}">${p.species}</option>`).join("")}</select>
+          <input type="number" min="0" step="0.5" id="staff_add_item_qty_${so.id}" placeholder="kg" style="width:80px">
+          <button class="btn btn-ghost btn-sm" onclick="staffAddStandingItem('${so.id}')">Add</button>
+        </div>
+      </div>
+      ${isActive?`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--cream)">
+        ${isSkipping
+          ? `<button class="btn btn-ghost btn-sm" onclick="staffUnskipStandingOrder('${so.id}')">Cancel skip — include ${thuLabel} after all</button>`
+          : `<button class="btn btn-ghost btn-sm" onclick="staffSkipStandingOrder('${so.id}','${thu}')">Skip ${thuLabel} only</button>`}
+      </div>`:''}
+    </div>`;
+  }).join("");
+
+  const draftLines = staffStandingDraft.map((l,i)=>`<div class="order-item-row"><span>${l.species}</span><span class="mono">${fmtKg(l.qty_kg)}kg <button onclick="removeStaffStandingDraftLine(${i})" style="color:var(--danger);margin-left:8px">✕</button></span></div>`).join("");
+
+  return `
+    <div class="card" style="margin-bottom:18px">
+      <div class="section-title">Standing orders</div>
+      <label for="staff_standing_chef">Chef</label>
+      <select id="staff_standing_chef" onchange="setStaffStandingChef(this.value)">${chefOptions}</select>
+    </div>
+    <div class="card" style="margin-bottom:18px">
+      <div class="section-title">Create a new standing order</div>
+      <label for="staff_standing_name">Name</label>
+      <input id="staff_standing_name" placeholder="Usual order">
+      <label for="staff_standing_species">Species</label>
+      <select id="staff_standing_species">${priceList.map(p=>`<option value="${p.species}">${p.species}</option>`).join("")}</select>
+      <label for="staff_standing_qty">Quantity (kg)</label>
+      <input id="staff_standing_qty" type="number" min="0" step="0.5">
+      <button class="btn btn-primary" onclick="addStaffStandingDraftLine()">Add line</button>
+      <div style="margin-top:14px">${draftLines}</div>
+      <button class="btn btn-ghost ${staffStandingDraft.length?'':'hidden'}" onclick="staffCreateStandingOrder()" style="margin-top:10px">Save standing order</button>
+    </div>
+    ${list || `<div class="card empty-state">No standing orders for this chef yet.</div>`}
+  `;
+}
+function setStaffStandingChef(id){ staffStandingChefId=id; staffStandingDraft=[]; renderStaffApp(); }
+function addStaffStandingDraftLine(){
+  const species=$("staff_standing_species").value;
+  const qty=parseFloat($("staff_standing_qty").value);
+  if(!qty||qty<=0){ toast("Enter a quantity"); return; }
+  staffStandingDraft.push({species,qty_kg:qty});
+  $("staff_standing_qty").value="";
+  renderStaffApp();
+}
+function removeStaffStandingDraftLine(i){ staffStandingDraft.splice(i,1); renderStaffApp(); }
+async function staffCreateStandingOrder(){
+  if(!staffStandingDraft.length){ toast("Add items first"); return; }
+  const name = $("staff_standing_name").value.trim() || "Usual order";
+  const {data:so,error} = await db.from("mn_standing_orders").insert({chef_id:staffStandingChefId, name}).select().single();
+  if(error){ toast("Couldn't save: "+error.message); return; }
+  const rows = staffStandingDraft.map(l=>({standing_order_id:so.id, species:l.species, qty_kg:l.qty_kg}));
+  await db.from("mn_standing_order_items").insert(rows);
+  staffStandingDraft=[];
+  toast("Standing order saved");
+  await loadStaffOnlyData(); renderStaffApp();
+}
+async function staffActivateStandingOrder(chefId, id){
+  await db.from("mn_standing_orders").update({active:false}).eq("chef_id",chefId);
+  const {error}=await db.from("mn_standing_orders").update({active:true}).eq("id",id);
+  if(error){ toast("Couldn't activate: "+error.message); return; }
+  toast("Set as their recurring order — it'll be placed automatically each week");
+  await loadStaffOnlyData(); renderStaffApp();
+}
+async function staffDeactivateStandingOrder(id){
+  const {error}=await db.from("mn_standing_orders").update({active:false}).eq("id",id);
+  if(error){ toast("Couldn't deactivate: "+error.message); return; }
+  toast("Deactivated — this won't be placed automatically anymore");
+  await loadStaffOnlyData(); renderStaffApp();
+}
+async function staffSkipStandingOrder(id,date){
+  const {error}=await db.from("mn_standing_orders").update({skip_date:date}).eq("id",id);
+  if(error){ toast("Couldn't skip: "+error.message); return; }
+  toast("Skipping that delivery — resumes automatically the week after");
+  await loadStaffOnlyData(); renderStaffApp();
+}
+async function staffUnskipStandingOrder(id){
+  const {error}=await db.from("mn_standing_orders").update({skip_date:null}).eq("id",id);
+  if(error){ toast("Couldn't undo: "+error.message); return; }
+  toast("Skip cancelled");
+  await loadStaffOnlyData(); renderStaffApp();
+}
+async function staffUpdateStandingItem(itemId,val){
+  const qty=parseFloat(val);
+  if(!qty||qty<=0){ await staffRemoveStandingItem(itemId); return; }
+  await db.from("mn_standing_order_items").update({qty_kg:qty}).eq("id",itemId);
+  await loadStaffOnlyData(); renderStaffApp();
+}
+async function staffRemoveStandingItem(itemId){
+  await db.from("mn_standing_order_items").delete().eq("id",itemId);
+  await loadStaffOnlyData(); renderStaffApp();
+}
+async function staffAddStandingItem(soId){
+  const species=$(`staff_add_item_sp_${soId}`).value;
+  const qty=parseFloat($(`staff_add_item_qty_${soId}`).value);
+  if(!species||!qty||qty<=0){ toast("Pick a species and quantity"); return; }
+  const so=allStandingOrders.find(s=>s.id===soId);
+  const existing=(so?.mn_standing_order_items||[]).find(i=>i.species===species);
+  if(existing){ await db.from("mn_standing_order_items").update({qty_kg:existing.qty_kg+qty}).eq("id",existing.id); }
+  else { await db.from("mn_standing_order_items").insert({standing_order_id:soId, species, qty_kg:qty}); }
+  toast("Added");
+  await loadStaffOnlyData(); renderStaffApp();
+}
+
 /* ----- PREFERENCES (drives Farmers Selection box) ----- */
 const PREF_LABELS = { less:"Less", normal:"Normal", more:"More" };
 function renderPrefsView(){
@@ -1403,13 +1556,14 @@ let allOrders=[], allStandingOrders=[], chefRequests=[], allChefPrefs=[], market
 let staffTab="summary";
 
 async function loadStaffOnlyData(){
-  const [c, o, r, sp, mr, fc] = await Promise.all([
+  const [c, o, r, sp, mr, fc, so] = await Promise.all([
     db.from("mn_chefs").select("*").order("business_name"),
     db.from("mn_orders").select("*, mn_order_items(*), mn_chefs(business_name)").order("created_at",{ascending:false}),
     db.from("mn_chef_requests").select("*").eq("status","pending").order("created_at",{ascending:true}),
     db.from("mn_chef_species_prefs").select("*"),
     db.from("mn_market_runs").select("*").order("run_date",{ascending:false}),
     db.from("mn_costs").select("species,retail_price_kg"), // Batch Tracker's table — read-only here, just for the retail price used in market variance
+    db.from("mn_standing_orders").select("*, mn_standing_order_items(*)").order("name"),
   ]);
   chefs = c.data||[];
   allOrders = o.data||[];
@@ -1417,6 +1571,7 @@ async function loadStaffOnlyData(){
   allChefPrefs = sp.data||[];
   marketRuns = mr.data||[];
   farmCosts = fc.data||[];
+  allStandingOrders = so.data||[];
 }
 /* Same shape as prefFor, but for a specific chef rather than whoever's
    logged in — used only by staff when computing a pack-time Farmers
@@ -1431,6 +1586,7 @@ function renderStaffApp(){
     <div class="tabs">
       <button class="tab ${staffTab==='summary'?'active':''}" onclick="setStaffTab('summary')">This week</button>
       <button class="tab ${staffTab==='orders'?'active':''}" onclick="setStaffTab('orders')">Orders ${pendingCount()?`(${pendingCount()})`:''}</button>
+      <button class="tab ${staffTab==='standing'?'active':''}" onclick="setStaffTab('standing')">Standing orders</button>
       <button class="tab ${staffTab==='market'?'active':''}" onclick="setStaffTab('market')">Market</button>
       <button class="tab ${staffTab==='chefs'?'active':''}" onclick="setStaffTab('chefs')">Chefs ${chefRequests.length?`(${chefRequests.length})`:''}</button>
       <button class="tab ${staffTab==='prices'?'active':''}" onclick="setStaffTab('prices')">Prices</button>
@@ -1447,6 +1603,7 @@ function renderStaffTab(){
   const el=$("staffTabContent");
   if(staffTab==="summary") el.innerHTML = renderSummaryView();
   else if(staffTab==="orders") el.innerHTML = renderOrdersView();
+  else if(staffTab==="standing") el.innerHTML = renderStaffStandingView();
   else if(staffTab==="market") el.innerHTML = renderMarketView();
   else if(staffTab==="chefs") el.innerHTML = renderChefsView();
   else if(staffTab==="prices") el.innerHTML = renderPricesView();
@@ -1692,6 +1849,12 @@ function renderOrdersView(){
           <div style="font-weight:700">Editing — ${o.mn_chefs?.business_name||'Unknown chef'}, for ${new Date(o.requested_date).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}</div>
           <span class="pill ${STATUS_PILL[o.status]||'muted'}">${o.status}</span>
         </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px">
+          <label for="staff_order_date_${o.id}" style="margin:0">Delivery date</label>
+          <input type="date" id="staff_order_date_${o.id}" value="${o.requested_date}" style="width:auto">
+          <button class="btn btn-ghost btn-sm" onclick="staffUpdateOrderDate('${o.id}', $('staff_order_date_${o.id}').value)">Save date</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">Overrides the normal cutoff — use for moving an order past its usual delivery day, even after ordering has closed for that week.</div>
         <div style="margin-top:10px">
           ${items.map(i=>`<div class="order-item-row" style="display:block">
             <div style="display:flex;justify-content:space-between;align-items:center">
@@ -1766,7 +1929,7 @@ async function staffSubmitOrder(){
   const chef_id=$("staff_order_chef").value;
   if(!chef_id||!staffDraftOrder.length) return;
   const chef=chefs.find(c=>c.id===chef_id);
-  const {data:order,error}=await db.from("mn_orders").insert({chef_id, order_source:'staff', status:'confirmed', requested_date: currentDeliveryThursday(), delivery_fee: deliveryFeeFor(chef)}).select().single();
+  const {data:order,error}=await db.from("mn_orders").insert({chef_id, order_source:'staff', status:'confirmed', requested_date: currentDeliveryThursday(chef?.delivery_zone), delivery_fee: deliveryFeeFor(chef)}).select().single();
   if(error){ toast("Couldn't save order: "+error.message); return; }
   const rows=staffDraftOrder.map(l=>({order_id:order.id, species:l.species, qty_kg:l.qty_kg, unit_price_per_kg: effectivePrice(priceFor(l.species))}));
   await db.from("mn_order_items").insert(rows);
@@ -1780,6 +1943,13 @@ async function updateOrderStatus(id, status){
   await loadStaffOnlyData();
   renderStaffApp();
   toast("Order updated");
+}
+async function staffUpdateOrderDate(orderId,newDate){
+  if(!newDate){ toast("Pick a date"); return; }
+  const {error}=await db.from("mn_orders").update({requested_date:newDate}).eq("id",orderId);
+  if(error){ toast("Couldn't save date: "+error.message); return; }
+  toast("Delivery date updated");
+  await loadStaffOnlyData(); renderStaffApp();
 }
 async function staffUpdateOrderItemQty(itemId,orderId,val){
   const qty=parseFloat(val);
@@ -1872,11 +2042,45 @@ function renderChefsView(){
       </div>
     </div>`;
   }).join("");
+  if(setupChefPasswordDraft===null) setupChefPasswordDraft = genPassword();
   return `
     ${requestsHtml}
     <div class="card" style="margin-bottom:18px">
+      <div class="section-title">Set up a chef account</div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">Creates a real login (email + password) straight away, so you can log test/monitoring orders on their behalf via "Log an order on a chef's behalf" below. Forward the password to the chef whenever you're ready to hand it over — they can change it themselves once they're in. Re-running this for an email that already has an account just resets its password.</p>
+      <label for="setup_chef_business">Business name</label>
+      <input id="setup_chef_business" placeholder="The Pines Restaurant">
+      <label for="setup_chef_contact">Contact name</label>
+      <input id="setup_chef_contact" placeholder="Jamie">
+      <label for="setup_chef_email">Email</label>
+      <input id="setup_chef_email" type="email" placeholder="jamie@thepines.com.au">
+      <label for="setup_chef_phone">Phone (optional)</label>
+      <input id="setup_chef_phone">
+      <label for="setup_chef_zone">Delivery zone</label>
+      <select id="setup_chef_zone">
+        ${Object.entries(DELIVERY_ZONE_LABELS).map(([k,label])=>`<option value="${k}">${label}</option>`).join("")}
+      </select>
+      <label for="setup_chef_password">Password</label>
+      <div style="display:flex;gap:8px">
+        <input id="setup_chef_password" value="${escAttr(setupChefPasswordDraft)}" onchange="setupChefPasswordDraft=this.value" style="flex:1">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="setupChefPasswordDraft=genPassword();renderStaffApp()">Regenerate</button>
+      </div>
+      <button class="btn btn-primary" onclick="setupChefAccount()" style="margin-top:10px">Create account</button>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">Needs the account-setup service to be deployed — if it's not set up yet, this will tell you.</div>
+      ${lastCreatedChefAccount?`<div class="card" style="margin-top:14px;border:1.5px solid var(--good)">
+        <div style="font-weight:700;margin-bottom:6px">Account ready for ${escSpecies(lastCreatedChefAccount.business_name)}</div>
+        <div style="font-size:13px">Email: <span class="mono">${escSpecies(lastCreatedChefAccount.email)}</span></div>
+        <div style="font-size:13px">Password: <span class="mono">${escSpecies(lastCreatedChefAccount.password)}</span></div>
+        <div style="font-size:12px;color:var(--warn);margin-top:6px">Copy this now — it won't be shown again. Sign in yourself with it (login screen → "Sign in with password") to place test orders, or forward it to the chef whenever you're ready.</div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn btn-ghost btn-sm" onclick="copyChefLogin()">Copy login details</button>
+          <button class="btn btn-ghost btn-sm" onclick="dismissChefLoginBox()">Dismiss</button>
+        </div>
+      </div>`:''}
+    </div>
+    <div class="card" style="margin-bottom:18px">
       <div class="section-title">Invite a new chef directly</div>
-      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">Most chefs can just use "Request access" on the login screen themselves — use this only if you'd rather set someone up yourself.</p>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">Most chefs can just use "Request access" on the login screen themselves — use this only if you'd rather set someone up yourself. (For placing test orders right away without emailing anyone, use "Set up a chef account" above instead.)</p>
       <label for="new_chef_business">Business name</label>
       <input id="new_chef_business" placeholder="The Pines Restaurant">
       <label for="new_chef_contact">Contact name</label>
@@ -1895,6 +2099,45 @@ function renderChefsView(){
     ${rows || '<div class="card empty-state">No chefs onboarded yet.</div>'}
   `;
 }
+let setupChefPasswordDraft=null, lastCreatedChefAccount=null;
+function genPassword(){
+  const chars='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const bytes=new Uint8Array(14);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b=>chars[b % chars.length]).join('');
+}
+async function setupChefAccount(){
+  const business_name=$("setup_chef_business").value.trim();
+  const email=$("setup_chef_email").value.trim();
+  const password=$("setup_chef_password").value.trim();
+  if(!business_name||!email){ toast("Business name and email are required"); return; }
+  if(!password||password.length<8){ toast("Password must be at least 8 characters"); return; }
+  const contact_name=$("setup_chef_contact").value.trim()||null;
+  const phone=$("setup_chef_phone").value.trim()||null;
+  const delivery_zone=$("setup_chef_zone").value;
+  const {data:session} = await db.auth.getSession();
+  try{
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/create-chef-account`,{
+      method:"POST",
+      headers:{ "Content-Type":"application/json", "Authorization":`Bearer ${session.session.access_token}` },
+      body: JSON.stringify({email, password, business_name, contact_name, phone, delivery_zone})
+    });
+    if(res.status===404){ toast("This isn't deployed yet — ask Adam to deploy the create-chef-account service"); return; }
+    let out;
+    try{ out = await res.json(); }catch(parseErr){ toast("Account service returned an unexpected response"); return; }
+    if(!res.ok){ toast("Couldn't create account: "+(out.error||res.statusText)); return; }
+    lastCreatedChefAccount = {business_name, email, password};
+    setupChefPasswordDraft = null;
+    toast(`Account set up for ${business_name}`);
+    await loadStaffOnlyData(); renderStaffApp();
+  }catch(e){ toast("Couldn't reach the account service"); }
+}
+function copyChefLogin(){
+  if(!lastCreatedChefAccount) return;
+  const text = `Log in at: ${location.origin}${location.pathname}\nEmail: ${lastCreatedChefAccount.email}\nPassword: ${lastCreatedChefAccount.password}`;
+  navigator.clipboard?.writeText(text).then(()=>toast("Copied — paste it wherever you're sending this to the chef")).catch(()=>toast("Couldn't copy — select and copy manually"));
+}
+function dismissChefLoginBox(){ lastCreatedChefAccount=null; renderStaffApp(); }
 async function saveChefEdit(id){
   const business_name=$("edit_chef_business").value.trim();
   const contact_name=$("edit_chef_contact").value.trim()||null;
