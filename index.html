@@ -263,7 +263,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.55"; // pre-launch build; 1.0 = first real launch — This-week summary card now shows the actual delivery Thursday date instead of "For Em's weekly email", and displays actual kg picked so far alongside the predicted range
+const APP_VERSION = "0.56"; // pre-launch build; 1.0 = first real launch — Mansfield/Benalla courier now delivers Wednesday (was Thursday for every zone) with self-service chef account creation; availability board no longer double-counts blocks that already gave up a first flush
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
