@@ -269,7 +269,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.58"; // pre-launch build; 1.0 = first real launch — wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.59"; // pre-launch build; 1.0 = first real launch — Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -2242,7 +2242,15 @@ function farmersSelectionHintHTML(qtyKg, chefId){
 }
 function renderOrdersView(){
   const logFormHtml = `<div class="card" id="staffOrderForm" style="margin-bottom:18px">${renderStaffOrderForm()}</div>`;
-  const ordersHtml = allOrders.length ? allOrders.map(o=>{
+  // Current = still to deliver, or not ticked off yet; past = delivered
+  // (or cancelled) before today. Past orders stay in the database - the
+  // Market tab, chefs' history and "last order" all read them - they're
+  // just folded away here so the list is only what needs doing (2026-10-31).
+  const today = todayISO();
+  const isPast = o => o.requested_date < today && (o.status==='fulfilled' || o.status==='cancelled');
+  const current = allOrders.filter(o=>!isPast(o)).sort((a,b)=>a.requested_date<b.requested_date?-1:a.requested_date>b.requested_date?1:0);
+  const past = allOrders.filter(isPast).sort((a,b)=>a.requested_date<b.requested_date?1:-1);
+  const orderCard = o=>{
     const items=o.mn_order_items||[];
     const total=items.reduce((s,i)=> s + (i.unit_price_per_kg ? i.unit_price_per_kg*i.qty_kg : 0), 0);
     const fee=o.delivery_fee??0;
@@ -2306,12 +2314,29 @@ function renderOrdersView(){
         <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="staffDeleteOrder('${o.id}')">Delete</button>
       </div>
     </div>`;
-  }).join("") : `<div class="card empty-state">No orders yet.</div>`;
-
-  return logFormHtml + ordersHtml;
+  };
+  const currentHtml = current.length ? current.map(orderCard).join("") : `<div class="card empty-state">Nothing to deliver right now.</div>`;
+  let pastHtml = '';
+  if(past.length){
+    pastHtml = `<button class="btn btn-ghost" style="width:auto;margin:6px 0 14px" onclick="showPastOrders=!showPastOrders; renderStaffTab()">${showPastOrders?'Hide':'Show'} past orders (${past.length})</button>`;
+    if(showPastOrders){
+      const byMonth = {};
+      for(const o of past){ const m = new Date(o.requested_date+'T00:00:00').toLocaleDateString('en-AU',{month:'long',year:'numeric'}); (byMonth[m]=byMonth[m]||[]).push(o); }
+      pastHtml += Object.entries(byMonth).map(([m, os])=>{
+        const kg = os.filter(o=>o.status!=='cancelled').reduce((t,o)=>t+(o.mn_order_items||[]).reduce((u,i)=>u+Number(i.qty_kg),0),0);
+        return `<div class="section-title" style="margin-top:6px">${m} · ${os.length} order${os.length===1?'':'s'} · ${fmtKg(kg)}kg</div>` +
+          os.map(o=>editingOrderId===o.id ? orderCard(o) : `<div class="order-item-row" style="align-items:center;gap:10px;padding:8px 2px">
+            <span><b>${esc(o.mn_chefs?.business_name||'Unknown')}</b> · ${fmtDayDate(o.requested_date)} <span style="color:var(--muted);font-size:12px">${orderLineSummary(o)}</span></span>
+            <span style="display:flex;align-items:center;gap:6px;flex-shrink:0"><span class="pill ${STATUS_PILL[o.status]||'muted'}">${o.status}</span><button class="btn btn-ghost btn-sm" style="width:auto" onclick="editingOrderId='${o.id}'; renderStaffApp()">Edit</button></span>
+          </div>`).join("");
+      }).join("");
+    }
+  }
+  return logFormHtml + `<div class="section-title">Current orders (${current.length})</div>` + currentHtml + pastHtml;
 }
 
 let staffDraftOrder=[];
+let showPastOrders=false;
 function staffAddOrderLine(){
   const species=$("staff_order_species").value;
   const qty=parseFloat($("staff_order_qty").value);
