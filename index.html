@@ -269,7 +269,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.59"; // pre-launch build; 1.0 = first real launch — Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.60"; // pre-launch build; 1.0 = first real launch — "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -2286,6 +2286,7 @@ function renderOrdersView(){
         </div>
         <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
           <button class="btn btn-primary btn-sm" onclick="editingOrderId=null; renderStaffApp()">Done editing</button>
+          <button class="btn btn-ghost btn-sm" onclick="staffSetStandingFromOrder('${o.id}')">Set as standing order</button>
           <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="staffDeleteOrder('${o.id}')">Delete order</button>
         </div>
       </div>`;
@@ -2309,8 +2310,9 @@ function renderOrdersView(){
       ${o.notes?`<div style="margin-top:10px;font-size:13px;color:var(--muted)">Note: ${o.notes}</div>`:''}
       <div class="order-item-row" style="margin-top:6px"><span>Delivery</span><span class="mono">$${fee.toFixed(2)}</span></div>
       <div class="cart-total" style="margin-top:6px"><span>Total</span><span class="mono">$${(total+fee).toFixed(2)}</span></div>
-      <div style="display:flex;gap:8px;margin-top:10px">
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
         <button class="btn btn-ghost btn-sm" onclick="editingOrderId='${o.id}'; renderStaffApp()">Edit</button>
+        ${o.order_source!=='standing'?`<button class="btn btn-ghost btn-sm" onclick="staffSetStandingFromOrder('${o.id}')">Set as standing order</button>`:''}
         <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="staffDeleteOrder('${o.id}')">Delete</button>
       </div>
     </div>`;
@@ -2337,6 +2339,35 @@ function renderOrdersView(){
 
 let staffDraftOrder=[];
 let showPastOrders=false;
+/* "Set as standing order" on an order card (2026-10-31, Adam's ask) - turns
+   an order taken by text into the customer's weekly recurring order in one
+   step. Their current active standing order, if any, is switched off (not
+   deleted), same as activating one from the Standing orders tab. The new
+   one skips the week of this order, if that's still to come, so the
+   weekly auto-placement doesn't add a second order on top of this one. */
+async function staffSetStandingFromOrder(orderId){
+  const o=allOrders.find(x=>x.id===orderId); if(!o) return;
+  const items=(o.mn_order_items||[]).filter(i=>Number(i.qty_kg)>0);
+  if(!items.length){ toast("This order has no items to repeat"); return; }
+  const chef=chefs.find(c=>c.id===o.chef_id);
+  const zoneDay=ZONE_DELIVERY_WEEKDAY[chef?.delivery_zone] ?? ZONE_DELIVERY_WEEKDAY.standard;
+  const dayName=new Date(2026,0,4+zoneDay).toLocaleDateString('en-AU',{weekday:'long'}); // 4 Jan 2026 is a Sunday
+  const existing=allStandingOrders.find(s=>s.chef_id===o.chef_id && s.active);
+  const name=prompt(`Repeat this every ${dayName} for ${chef?.business_name||'this customer'}?\n\n${items.map(i=>`${i.species} ${fmtKg(i.qty_kg)}kg`).join(', ')}`+
+    (existing?`\n\nThis replaces their current standing order "${existing.name}" (kept, just switched off).`:'')+`\n\nName it:`, existing?.name||"Usual order");
+  if(name===null) return;
+  const sameWeekDelivery=addDaysISO(weekStartISO(o.requested_date), (zoneDay+6)%7);
+  const skip = o.status!=='cancelled' && sameWeekDelivery>=todayISO() ? sameWeekDelivery : null;
+  const {data:so,error}=await db.from("mn_standing_orders").insert({chef_id:o.chef_id, name:name.trim()||"Usual order", active:false, skip_date:skip}).select().single();
+  if(error){ toast("Couldn't save: "+error.message); return; }
+  const {error:itemErr}=await db.from("mn_standing_order_items").insert(items.map(i=>({standing_order_id:so.id, species:i.species, qty_kg:i.qty_kg})));
+  if(itemErr){ await db.from("mn_standing_orders").delete().eq("id",so.id); toast("Couldn't save its items: "+itemErr.message); return; }
+  await db.from("mn_standing_orders").update({active:false}).eq("chef_id",o.chef_id);
+  const {error:actErr}=await db.from("mn_standing_orders").update({active:true}).eq("id",so.id);
+  if(actErr){ toast("Saved, but couldn't switch it on: "+actErr.message+" - activate it from the Standing orders tab"); }
+  else toast(`Standing order set — placed automatically every ${dayName}${skip?`, starting the week after ${fmtDayDate(skip)}`:''}`);
+  await loadStaffOnlyData(); renderStaffApp();
+}
 function staffAddOrderLine(){
   const species=$("staff_order_species").value;
   const qty=parseFloat($("staff_order_qty").value);
