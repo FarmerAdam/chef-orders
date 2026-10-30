@@ -140,6 +140,12 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .summary-row:last-child{border-bottom:none}
 .summary-row-left{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .summary-row-left .dot{width:10px;height:10px;border-radius:50%;flex:none}
+.cap-table{width:100%;border-collapse:collapse;font-size:14px}
+.cap-table th{text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--cream)}
+.cap-table td{text-align:right;padding:7px 8px;border-bottom:1px solid var(--cream);white-space:nowrap}
+.cap-table th:first-child,.cap-table td:first-child{text-align:left}
+.cap-table tfoot td{font-weight:700;border-bottom:none}
+.cap-table .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:middle}
 .price-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--cream)}
 .price-row:last-child{border-bottom:none}
 .request-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 0;border-bottom:1px solid var(--cream);flex-wrap:wrap}
@@ -263,7 +269,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.57"; // pre-launch build; 1.0 = first real launch — Market tab's "sold wholesale" no longer counts future-dated orders (e.g. next week's) into this week's rollup
+const APP_VERSION = "0.58"; // pre-launch build; 1.0 = first real launch — wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -463,11 +469,23 @@ db.auth.onAuthStateChange(async (event, session)=>{
 let batches=[], movements=[], harvests=[], priceList=[], yieldDefaults=[];
 let chefs=[]; // staff only
 
+/* Supabase silently returns at most 1000 rows per select - mn_harvests
+   and mn_movements are both past that, so the newest rows (this week's
+   harvests) were being dropped. Pages until a short page comes back. */
+async function selectAllRows(table){
+  const rows=[];
+  for(let from=0; ; from+=1000){
+    const {data, error} = await db.from(table).select("*").order("id").range(from, from+999);
+    if(error) return {data:rows, error};
+    rows.push(...data);
+    if(data.length<1000) return {data:rows, error:null};
+  }
+}
 async function loadSharedData(){
   const [b, m, h, pl, yd] = await Promise.all([
-    db.from("mn_batches").select("*"),
-    db.from("mn_movements").select("*"),
-    db.from("mn_harvests").select("*"),
+    selectAllRows("mn_batches"),
+    selectAllRows("mn_movements"),
+    selectAllRows("mn_harvests"),
     db.from("mn_price_list").select("*"),
     db.from("mn_yield_defaults").select("*"),
   ]);
@@ -804,6 +822,7 @@ async function loadChefOnlyData(){
     db.from("mn_orders").select("*, mn_order_items(*)").eq("chef_id", myChefRow.id).order("created_at",{ascending:false}),
     db.from("mn_standing_orders").select("*, mn_standing_order_items(*)").eq("chef_id", myChefRow.id),
     db.from("mn_chef_species_prefs").select("*").eq("chef_id", myChefRow.id),
+    loadWeekAvail(weekStartISO(currentDeliveryThursday(myChefRow.delivery_zone))),
   ]);
   chefOrders = o.data||[];
   chefStandingOrders = so.data||[];
@@ -852,9 +871,11 @@ function renderBoardView(){
     </div>`;
   }
 
+  const cap = chefCap();
   const rows = board.map(e=>{
     const price = priceFor(e.species);
     const priceLabel = priceLabelHTML(price);
+    const capLeft = capLeftFor(cap, e.species);
     const hasActual = e.actualKgThisWeek>0;
     const barMax = Math.max(e.displayHigh * 1.15, 1); // headroom so the high end isn't flush against the edge
     const lowPct = Math.min(100,(e.displayLow/barMax)*100);
@@ -882,6 +903,7 @@ function renderBoardView(){
           <span>${fmtKg(e.displayHigh)}kg</span>
         </div>
       </div>
+      ${capLeft!=null?`<div style="font-size:12px;margin:4px 0 2px;color:${capLeft>0.25?'var(--muted)':'var(--danger)'}">${capLeft>0.25?`Up to ${fmtKg(capLeft)}kg available to order`:'Fully booked this week'}</div>`:''}
       <div class="board-row-order">
         <input type="number" min="0" step="0.5" placeholder="kg" class="qty-input" id="qty_${cssId(e.species)}" value="${cart[e.species]||''}" oninput="setCartQty('${escSpecies(e.species)}', this.value)">
         <button class="btn btn-ghost btn-sm" onclick="addRepeatLast('${escSpecies(e.species)}')" title="Add what you ordered last time">↻ last order</button>
@@ -1068,10 +1090,13 @@ function renderCartView(){
     const lineTotal = eff!=null ? eff*qty : null;
     if(lineTotal!=null) total+=lineTotal; else hasQuoteItems=true;
     const noteVal = cartNotes[species]||'';
+    // left for this item given the rest of the cart - same figure the board shows
+    const capLeft = price?.special_only ? null : capLeftFor(chefCap(items.filter(([sp])=>sp!==species).map(([item,kg])=>({item,kg}))), species);
+    const capWarn = capLeft!=null && qty > capLeft + 0.05 ? `<div style="font-size:12px;color:var(--danger);margin-top:2px">Only ${fmtKg(Math.max(0, capLeft))}kg left this week</div>` : '';
     return `<div class="cart-row">
       <div>
         <div style="font-weight:600">${species}</div>
-        <div style="font-size:12px;color:var(--muted)">${eff!=null?priceLabelHTML(price):'Price on request'}</div>
+        <div style="font-size:12px;color:var(--muted)">${eff!=null?priceLabelHTML(price):'Price on request'}</div>${capWarn}
       </div>
       <div class="cart-row-controls">
         <input type="number" min="0" step="0.5" class="qty-input" value="${qty}" oninput="setCartQty('${escSpecies(species)}', this.value); renderChefTab()">
@@ -1163,10 +1188,27 @@ function currentDeliveryThursdayLabel(zone){
   return `${weekday} ${dd}/${mm}/${yy}`;
 }
 
+// What this chef's cart leaves for their delivery week (null = no forecast, no cap).
+function chefCap(extra){
+  if(!myChefRow) return null;
+  return computeCap(weekAvail[weekStartISO(currentDeliveryThursday(myChefRow.delivery_zone))], extra);
+}
 async function submitOrder(){
   const items = Object.entries(cart).filter(([,q])=>q>0);
   if(!items.length) return;
   const requested_date = $("order_date").value || todayISO();
+  // Hard cap for chefs ordering themselves - re-fetched so two chefs
+  // ordering at once can't both take the last few kg.
+  const ws = weekStartISO(requested_date);
+  if(capReady){
+    const fresh = await loadWeekAvail(ws);
+    const over = capOverages(computeCap(fresh, items.filter(([sp])=>!priceFor(sp)?.special_only).map(([item,kg])=>({item,kg}))), items.map(([item,kg])=>({item,kg})));
+    if(over.length){
+      toast(`Sorry, that's more than we have left: ${over.map(o=>`${o.item} (${fmtKg(o.over)}kg over)`).join(', ')}`);
+      renderChefTab();
+      return;
+    }
+  }
   const notes = ($("order_notes").value||orderNote||"").trim() || null;
 
   const {data:order, error} = await db.from("mn_orders").insert({
@@ -1223,7 +1265,7 @@ function renderHistoryView(){
             </div>`;
           }).join("")}
           <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-            <select id="add_orderitem_sp_${o.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escSpecies(p.species)}">${p.species}</option>`).join("")}</select>
+            <select id="add_orderitem_sp_${o.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escAttr(p.species)}">${p.species}</option>`).join("")}</select>
             <input type="number" min="0" step="0.5" id="add_orderitem_qty_${o.id}" placeholder="kg" style="width:80px">
             <button class="btn btn-ghost btn-sm" onclick="addOrderItem('${o.id}')">Add</button>
           </div>
@@ -1318,7 +1360,7 @@ function renderStandingView(){
           </span>
         </div>`).join("")}
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-          <select id="add_item_sp_${so.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escSpecies(p.species)}">${p.species}</option>`).join("")}</select>
+          <select id="add_item_sp_${so.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escAttr(p.species)}">${p.species}</option>`).join("")}</select>
           <input type="number" min="0" step="0.5" id="add_item_qty_${so.id}" placeholder="kg" style="width:80px">
           <button class="btn btn-ghost btn-sm" onclick="addStandingItem('${so.id}')">Add</button>
         </div>
@@ -1440,7 +1482,7 @@ function renderStaffStandingView(){
           </span>
         </div>`).join("")}
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-          <select id="staff_add_item_sp_${so.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escSpecies(p.species)}">${p.species}</option>`).join("")}</select>
+          <select id="staff_add_item_sp_${so.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escAttr(p.species)}">${p.species}</option>`).join("")}</select>
           <input type="number" min="0" step="0.5" id="staff_add_item_qty_${so.id}" placeholder="kg" style="width:80px">
           <button class="btn btn-ghost btn-sm" onclick="staffAddStandingItem('${so.id}')">Add</button>
         </div>
@@ -1592,6 +1634,7 @@ async function loadStaffOnlyData(){
     db.from("mn_market_runs").select("*").order("run_date",{ascending:false}),
     db.from("mn_costs").select("species,retail_price_kg"), // Batch Tracker's table — read-only here, just for the retail price used in market variance
     db.from("mn_standing_orders").select("*, mn_standing_order_items(*)").order("name"),
+    loadCapWeeks(),
   ]);
   chefs = c.data||[];
   allOrders = o.data||[];
@@ -1630,7 +1673,7 @@ function pendingCount(){ return allOrders.filter(o=>o.status==='pending').length
 function renderStaffTab(){
   const el=$("staffTabContent");
   if(staffTab==="summary") el.innerHTML = renderSummaryView();
-  else if(staffTab==="orders") el.innerHTML = renderOrdersView();
+  else if(staffTab==="orders"){ el.innerHTML = renderOrdersView(); renderDraftLines(); }
   else if(staffTab==="standing") el.innerHTML = renderStaffStandingView();
   else if(staffTab==="market") el.innerHTML = renderMarketView();
   else if(staffTab==="chefs") el.innerHTML = renderChefsView();
@@ -1638,13 +1681,352 @@ function renderStaffTab(){
   else if(staffTab==="yields") el.innerHTML = renderYieldsView();
 }
 
-/* ----- THIS WEEK SUMMARY (for Em's email) + low-stock flags ----- */
+/* ================= WHOLESALE CAP (2026-10-31) =================
+   Adam's ask after Melbourne Cup weekend sold out wholesale and left
+   nothing for markets: never commit more than the farm will grow, and
+   always hold some back for markets.
+
+   For a delivery week (Mon-Sun): available to wholesale =
+     MAVIS's projection for the week (mn_weekly_forecast - the same
+     numbers as the Farm Panel, written by MAVIS every 5 min)
+     - the market reserve (mn_order_settings.market_reserve_pct)
+     - everything already ordered for that week (all customers, plus
+       standing orders not yet turned into that week's order).
+   mn_week_commitments() returns all three in one call; it's a security
+   definer function so chefs get the combined totals without seeing anyone
+   else's orders. Bundles (Mixed Oyster, Farmers Selection) aren't species,
+   so their kg is spread across the species they're packed from, in
+   proportion to what each still has left.
+
+   Staff entering an order get a warning and can still go over (they
+   know when there's extra in the cool room). Chefs ordering themselves
+   are held to it. MAVIS only projects this week and next - further out
+   there's no forecast and so no cap. */
+let weekAvail = {};      // week_start ISO -> mn_week_commitments() result
+let capReady = true;     // false until the 2026-10-31 migration has been run
+const BUNDLE_SOURCES = [
+  ["Mixed Oyster", sp => /oyster/i.test(sp)],
+  ["Farmers Selection", () => true],
+];
+function localISO(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function weekStartISO(iso){ const d=new Date(iso+'T00:00:00'); d.setDate(d.getDate()-((d.getDay()+6)%7)); return localISO(d); }
+function addDaysISO(iso, n){ const d=new Date(iso+'T00:00:00'); d.setDate(d.getDate()+n); return localISO(d); }
+function fmtDayDate(iso, opts){ return new Date(iso+'T00:00:00').toLocaleDateString('en-AU', opts||{weekday:'short',day:'numeric',month:'short'}); }
+
+async function loadWeekAvail(weekStart){
+  const {data, error} = await db.rpc('mn_week_commitments', {p_week_start: weekStart});
+  if(error){
+    // PGRST202 = function not found: the migration hasn't been run yet.
+    if(error.code==='PGRST202' || /mn_week_commitments/.test(error.message||'')) capReady=false;
+    weekAvail[weekStart]=null;
+    return null;
+  }
+  capReady=true;
+  weekAvail[weekStart]=data;
+  return data;
+}
+async function loadCapWeeks(){
+  const thisWeek = weekStartISO(todayISO());
+  await Promise.all([loadWeekAvail(thisWeek), loadWeekAvail(addDaysISO(thisWeek,7))]);
+}
+
+/* extra: [{item, kg}] not saved yet (a draft order or a chef's cart).
+   Returns null when there's no forecast for that week. */
+function computeCap(data, extra){
+  if(!data || !(data.forecast||[]).length) return null;
+  const reservePct = Number(data.reserve_pct ?? 25);
+  const rows = {};
+  for(const f of data.forecast){
+    const total = Number(f.total_kg)||0;
+    const reserve = total*reservePct/100;
+    rows[normalizeSpecies(f.species)] = { species:f.species, forecast:total, reserve, wholesale:total-reserve, committed:0, left:total-reserve };
+  }
+  const bundleKg = {};
+  for(const c of [...(data.committed||[]), ...(extra||[])]){
+    const kg = Number(c.kg)||0;
+    if(BUNDLE_SOURCES.some(([b])=>normalizeSpecies(b)===normalizeSpecies(c.item))){
+      const name = BUNDLE_SOURCES.find(([b])=>normalizeSpecies(b)===normalizeSpecies(c.item))[0];
+      bundleKg[name]=(bundleKg[name]||0)+kg; continue;
+    }
+    const n = normalizeSpecies(c.item);
+    // ordered but not in the forecast at all (e.g. nothing fruiting) - shows as over
+    if(!rows[n]) rows[n] = { species:c.item, forecast:0, reserve:0, wholesale:0, committed:0, left:0 };
+    rows[n].committed += kg; rows[n].left -= kg;
+  }
+  const bundles = {};
+  for(const [name, from] of BUNDLE_SOURCES){
+    const kg = bundleKg[name]||0;
+    const pool = Object.values(rows).filter(r=>from(r.species) && r.left>0);
+    const headroom = pool.reduce((s,r)=>s+r.left,0);
+    if(kg>0 && headroom>0){
+      const share = Math.min(kg, headroom);
+      for(const r of pool){ const take = share*r.left/headroom; r.committed+=take; r.left-=take; }
+    }
+    bundles[name] = { committed:kg, over:Math.max(0, kg-headroom) };
+  }
+  for(const [name, from] of BUNDLE_SOURCES){
+    bundles[name].left = Object.values(rows).filter(r=>from(r.species) && r.left>0).reduce((s,r)=>s+r.left,0) - bundles[name].over;
+  }
+  const list = Object.values(rows).sort((a,b)=>b.forecast-a.forecast);
+  const updated = data.forecast.map(f=>f.updated_at).sort().pop();
+  return { rows:list, bundles, reservePct, updatedAt:updated,
+           totalForecast:list.reduce((s,r)=>s+r.forecast,0), totalLeft:list.reduce((s,r)=>s+Math.max(0,r.left),0) };
+}
+// What's left of one item (species or bundle) in a computed cap; null if unknown.
+function capLeftFor(cap, item){
+  if(!cap) return null;
+  const b = BUNDLE_SOURCES.find(([name])=>normalizeSpecies(name)===normalizeSpecies(item));
+  if(b) return cap.bundles[b[0]].left;
+  const r = cap.rows.find(r=>normalizeSpecies(r.species)===normalizeSpecies(item));
+  return r ? r.left : 0;
+}
+// Lines in `items` ([{item,kg}]) that push their item below zero.
+function capOverages(cap, items){
+  if(!cap) return [];
+  const out=[];
+  for(const it of items){
+    const left = capLeftFor(cap, it.item);
+    if(left!=null && left < -0.05) out.push({item:it.item, over:-left});
+  }
+  return out.filter((o,i,a)=>a.findIndex(x=>normalizeSpecies(x.item)===normalizeSpecies(o.item))===i);
+}
+function forecastAgeNote(cap){
+  if(!cap?.updatedAt) return '';
+  const mins = Math.round((Date.now()-new Date(cap.updatedAt).getTime())/60000);
+  const stale = mins > 60;
+  const when = mins < 2 ? 'just now' : mins < 90 ? `${mins} min ago` : new Date(cap.updatedAt).toLocaleString('en-AU',{weekday:'short',hour:'numeric',minute:'2-digit'});
+  return `<span style="color:${stale?'var(--warn)':'var(--muted)'}">MAVIS forecast, updated ${when}${stale?' — MAVIS may be offline':''}</span>`;
+}
+
+/* ----- STAFF: THIS WEEK / NEXT WEEK ----- */
+let summaryWeekOffset = 0; // 0 = this week, 1 = next week
+function setSummaryWeek(n){ summaryWeekOffset=n; renderStaffTab(); }
+async function saveReservePct(val){
+  const pct = Math.round(Number(val));
+  if(isNaN(pct) || pct<0 || pct>90){ toast("Reserve must be between 0 and 90%"); return; }
+  const {error} = await db.from("mn_order_settings").upsert({key:'market_reserve_pct', value:pct});
+  if(error){ toast("Couldn't save: "+error.message); return; }
+  await loadCapWeeks();
+  toast(`Keeping ${pct}% back for markets`);
+  renderStaffTab();
+}
+async function markOrderFulfilled(id){
+  await db.from("mn_orders").update({status:'fulfilled', updated_at:new Date().toISOString()}).eq("id",id);
+  await loadStaffOnlyData(); renderStaffApp();
+}
+function weekOrders(weekStart){
+  const end = addDaysISO(weekStart,7);
+  return allOrders.filter(o=>o.status!=='cancelled' && o.requested_date>=weekStart && o.requested_date<end);
+}
+function overdueOrders(){
+  const today=todayISO();
+  return allOrders.filter(o=>(o.status==='pending'||o.status==='confirmed') && o.requested_date<today)
+    .sort((a,b)=>a.requested_date<b.requested_date?-1:1);
+}
+function orderLineSummary(o){
+  return (o.mn_order_items||[]).map(i=>`${esc(i.species)} ${fmtKg(i.qty_kg)}kg`).join(' · ') || 'No items';
+}
+function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function renderCapSummaryView(){
+  const thisWeek = weekStartISO(todayISO());
+  const ws = addDaysISO(thisWeek, 7*summaryWeekOffset);
+  const data = weekAvail[ws];
+  const cap = computeCap(data);
+  const weekLabel = `${fmtDayDate(ws,{day:'numeric',month:'short'})} – ${fmtDayDate(addDaysISO(ws,6),{day:'numeric',month:'short'})}`;
+  const toggle = `<div class="tabs" style="margin-bottom:14px">
+      <button class="tab ${summaryWeekOffset===0?'active':''}" onclick="setSummaryWeek(0)">This week</button>
+      <button class="tab ${summaryWeekOffset===1?'active':''}" onclick="setSummaryWeek(1)">Next week</button>
+    </div>`;
+
+  let availHtml;
+  if(!cap){
+    availHtml = `<div class="card" style="margin-bottom:18px">
+      <div class="section-title">Available for wholesale · ${weekLabel}</div>
+      <div class="empty-state">No MAVIS forecast for this week yet. Orders can still be logged, there's just nothing to check them against.</div>
+    </div>`;
+  } else {
+    const rowHtml = cap.rows.filter(r=>r.forecast>0||r.committed>0).map(r=>{
+      const over = r.left < -0.05, tight = !over && r.wholesale>0 && r.left < r.wholesale*0.15;
+      return `<tr>
+        <td><span class="dot" style="background:${speciesColor(r.species)}"></span> ${esc(r.species)}</td>
+        <td class="mono">${fmtKg(r.forecast)}</td>
+        <td class="mono" style="color:var(--muted)">${fmtKg(r.reserve)}</td>
+        <td class="mono">${fmtKg(r.committed)}</td>
+        <td class="mono" style="font-weight:700;color:${over?'var(--danger)':tight?'var(--warn)':'inherit'}">${over?'−'+fmtKg(-r.left)+' over':fmtKg(r.left)}</td>
+      </tr>`;
+    }).join("");
+    const bundleHtml = BUNDLE_SOURCES.map(([name])=>{
+      const b=cap.bundles[name];
+      return `<span style="margin-right:16px">${name}: <b class="mono">${fmtKg(Math.max(0,b.left))}kg</b> left${b.committed?` <span style="color:var(--muted)">(${fmtKg(b.committed)}kg ordered)</span>`:''}${b.over>0.05?` <span style="color:var(--danger)">over by ${fmtKg(b.over)}kg</span>`:''}</span>`;
+    }).join("");
+    const copyText = `Available ${weekLabel}:\n` + cap.rows.filter(r=>r.left>0.25).map(r=>`${r.species}: ${fmtKg(r.left)}kg`).join("\n");
+    availHtml = `<div class="card" style="margin-bottom:18px">
+      <div class="section-title">Available for wholesale · ${weekLabel}</div>
+      <div style="font-size:13px;margin-bottom:10px">${forecastAgeNote(cap)}</div>
+      <div style="overflow-x:auto">
+      <table class="cap-table">
+        <thead><tr><th>Species</th><th>Projected</th><th>Markets</th><th>Ordered</th><th>Left</th></tr></thead>
+        <tbody>${rowHtml}</tbody>
+        <tfoot><tr><td>Total</td><td class="mono">${fmtKg(cap.totalForecast)}</td><td class="mono" style="color:var(--muted)">${fmtKg(cap.totalForecast*cap.reservePct/100)}</td><td class="mono">${fmtKg(cap.rows.reduce((s,r)=>s+r.committed,0))}</td><td class="mono">${fmtKg(cap.totalLeft)}</td></tr></tfoot>
+      </table>
+      </div>
+      <div style="font-size:13px;margin-top:10px">${bundleHtml}</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px;font-size:13px">
+        <label for="reserve_pct" style="margin:0">Keep back for markets</label>
+        <input id="reserve_pct" type="number" min="0" max="90" step="5" value="${cap.reservePct}" style="width:70px">%
+        <button class="btn btn-ghost btn-sm" onclick="saveReservePct($('reserve_pct').value)">Save</button>
+        <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="copySummary(\`${copyText.replace(/[`\\$]/g,'')}\`)">Copy what's available</button>
+      </div>
+    </div>`;
+  }
+
+  // deliveries this week, grouped by day, with a pick list per day
+  const orders = weekOrders(ws);
+  const byDay = {};
+  for(const o of orders) (byDay[o.requested_date]=byDay[o.requested_date]||[]).push(o);
+  const daysHtml = Object.keys(byDay).sort().map(day=>{
+    const os = byDay[day];
+    const pick = {};
+    for(const o of os) for(const i of (o.mn_order_items||[])) pick[i.species]=(pick[i.species]||0)+Number(i.qty_kg);
+    return `<div class="card" style="margin-bottom:14px">
+      <div class="section-title">${fmtDayDate(day,{weekday:'long',day:'numeric',month:'short'})} · ${os.length} order${os.length===1?'':'s'}</div>
+      <div style="font-size:13px;margin-bottom:10px"><b>Pick:</b> ${Object.entries(pick).sort((a,b)=>b[1]-a[1]).map(([s,k])=>`${esc(s)} <span class="mono">${fmtKg(k)}kg</span>`).join(' · ')}</div>
+      ${os.map(o=>`<div class="order-item-row" style="align-items:center;gap:10px">
+        <span><b>${esc(o.mn_chefs?.business_name||'Unknown')}</b> <span style="color:var(--muted);font-size:12px">${orderLineSummary(o)}</span></span>
+        <span style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+          <span class="pill ${STATUS_PILL[o.status]||'muted'}">${o.status}</span>
+          ${o.status!=='fulfilled'?`<button class="btn btn-ghost btn-sm" onclick="markOrderFulfilled('${o.id}')">Fulfilled</button>`:''}
+        </span>
+      </div>`).join("")}
+    </div>`;
+  }).join("") || `<div class="card empty-state" style="margin-bottom:14px">No orders for ${weekLabel} yet.</div>`;
+
+  const overdue = overdueOrders();
+  const overdueHtml = overdue.length ? `<div class="card" style="margin-bottom:18px;border:1.5px solid var(--warn)">
+      <div class="section-title">Past delivery date, not ticked off (${overdue.length})</div>
+      ${overdue.map(o=>`<div class="order-item-row" style="align-items:center;gap:10px">
+        <span><b>${esc(o.mn_chefs?.business_name||'Unknown')}</b> · ${fmtDayDate(o.requested_date)} <span style="color:var(--muted);font-size:12px">${orderLineSummary(o)}</span></span>
+        <span style="display:flex;gap:6px;flex-shrink:0">
+          <button class="btn btn-ghost btn-sm" onclick="markOrderFulfilled('${o.id}')">Fulfilled</button>
+          <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="updateOrderStatus('${o.id}','cancelled')">Cancelled</button>
+        </span>
+      </div>`).join("")}
+    </div>` : '';
+
+  return toggle + overdueHtml + availHtml + daysHtml;
+}
+
+/* ----- STAFF: LOG AN ORDER (from a text message) ----- */
+let staffOrderChefId=null, staffOrderDate=null, staffOrderNotes="", addingCustomer=false;
+// The next few Wednesdays and Thursdays, today included.
+function upcomingDeliveryDates(n){
+  const out=[]; let d=todayISO();
+  for(let i=0; out.length<n && i<28; i++, d=addDaysISO(d,1)){
+    const wd=new Date(d+'T00:00:00').getDay();
+    if(wd===3||wd===4) out.push(d);
+  }
+  return out;
+}
+function defaultDateForChef(chef){
+  const wd = ZONE_DELIVERY_WEEKDAY[chef?.delivery_zone] ?? ZONE_DELIVERY_WEEKDAY.standard;
+  return upcomingDeliveryDates(6).find(d=>new Date(d+'T00:00:00').getDay()===wd) || upcomingDeliveryDates(1)[0];
+}
+function staffCap(){
+  if(!staffOrderDate) return null;
+  return computeCap(weekAvail[weekStartISO(staffOrderDate)], staffDraftOrder.map(l=>({item:l.species, kg:l.qty_kg})));
+}
+function capBaseFor(date){ return computeCap(weekAvail[weekStartISO(date)]); }
+function renderStaffOrderForm(){
+  if(!chefs.length && !addingCustomer) addingCustomer=true;
+  const chef = chefs.find(c=>c.id===staffOrderChefId) || chefs[0];
+  if(chef && !staffOrderChefId) staffOrderChefId = chef.id;
+  if(!staffOrderDate) staffOrderDate = defaultDateForChef(chef);
+  const base = capBaseFor(staffOrderDate);
+  const dates = upcomingDeliveryDates(4);
+  if(!dates.includes(staffOrderDate)) dates.push(staffOrderDate);
+  const speciesOpts = priceList.filter(p=>!p.special_only).map(p=>{
+    const left = capLeftFor(base, p.species);
+    return `<option value="${escAttr(p.species)}">${esc(p.species)}${left!=null?` — ${left>0.05?fmtKg(left)+'kg left':'none left'}`:''}</option>`;
+  }).join("") + priceList.filter(p=>p.special_only).map(p=>`<option value="${escAttr(p.species)}">${esc(p.species)} (special)</option>`).join("");
+  const customerHtml = addingCustomer ? `
+      <div style="border:1px dashed var(--cream);border-radius:10px;padding:12px;margin-bottom:6px">
+        <div style="font-weight:700;margin-bottom:6px">New customer</div>
+        <input id="nc_business" placeholder="Business name *">
+        <input id="nc_contact" placeholder="Contact name">
+        <input id="nc_phone" placeholder="Phone">
+        <select id="nc_zone">${Object.entries(DELIVERY_ZONE_LABELS).map(([z,l])=>`<option value="${z}">${l}</option>`).join("")}</select>
+        <div style="font-size:12px;color:var(--muted);margin:4px 0 8px">No login needed — they can be given one later from the Chefs tab.</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary btn-sm" onclick="staffAddCustomer()">Save customer</button>
+          ${chefs.length?`<button class="btn btn-ghost btn-sm" onclick="addingCustomer=false; refreshStaffOrderForm()">Cancel</button>`:''}
+        </div>
+      </div>` : `
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="staff_order_chef" onchange="setStaffOrderChef(this.value)" style="flex:1">${chefs.map(c=>`<option value="${c.id}" ${c.id===staffOrderChefId?'selected':''}>${esc(c.business_name)}</option>`).join("")}</select>
+        <button class="btn btn-ghost btn-sm" onclick="addingCustomer=true; refreshStaffOrderForm()">+ New</button>
+      </div>`;
+  return `
+      <div class="section-title">Log an order</div>
+      <label>Customer</label>
+      ${customerHtml}
+      <label>Delivery</label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        ${dates.map(d=>`<button class="btn btn-sm ${d===staffOrderDate?'btn-primary':'btn-ghost'}" style="width:auto;margin:0" onclick="setStaffOrderDate('${d}')">${fmtDayDate(d)}</button>`).join("")}
+        <input type="date" value="${staffOrderDate}" onchange="setStaffOrderDate(this.value)" style="width:auto">
+      </div>
+      <div style="font-size:12px;margin-top:6px">${base?forecastAgeNote(base):capReady?'<span style="color:var(--muted)">No forecast that far ahead — no availability check.</span>':''}</div>
+      <label for="staff_order_species">Add</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <select id="staff_order_species" style="flex:1;min-width:180px">${speciesOpts}</select>
+        <input id="staff_order_qty" type="number" min="0" step="0.5" placeholder="kg" style="width:80px" onkeydown="if(event.key==='Enter') staffAddOrderLine()">
+        <button class="btn btn-ghost" onclick="staffAddOrderLine()">Add</button>
+      </div>
+      <div id="staffDraftLines" style="margin-top:14px"></div>
+      <label for="staff_order_notes">Notes (optional)</label>
+      <input id="staff_order_notes" value="${esc(staffOrderNotes)}" oninput="staffOrderNotes=this.value" placeholder="e.g. 'texted Tue, wants it early'">
+      <button class="btn btn-primary hidden" id="staffSubmitOrderBtn" onclick="staffSubmitOrder()" style="margin-top:10px">Save order</button>`;
+}
+function refreshStaffOrderForm(){
+  const el=$("staffOrderForm"); if(!el) return;
+  el.innerHTML = renderStaffOrderForm();
+  renderDraftLines();
+}
+function setStaffOrderChef(id){
+  staffOrderChefId=id;
+  staffOrderDate=defaultDateForChef(chefs.find(c=>c.id===id));
+  ensureWeekLoaded(staffOrderDate);
+}
+function setStaffOrderDate(d){ if(!d) return; staffOrderDate=d; ensureWeekLoaded(d); }
+async function ensureWeekLoaded(d){
+  const ws=weekStartISO(d);
+  refreshStaffOrderForm();
+  if(capReady && !(ws in weekAvail)){ await loadWeekAvail(ws); refreshStaffOrderForm(); }
+}
+async function staffAddCustomer(){
+  const business_name=$("nc_business").value.trim();
+  if(!business_name){ toast("Business name is required"); return; }
+  const {data, error} = await db.from("mn_chefs").insert({
+    business_name, contact_name:$("nc_contact").value.trim()||null, phone:$("nc_phone").value.trim()||null,
+    delivery_zone:$("nc_zone").value, active:true,
+  }).select().single();
+  if(error){ toast("Couldn't add customer: "+error.message); return; }
+  await loadStaffOnlyData();
+  addingCustomer=false; staffOrderChefId=data.id; staffOrderDate=defaultDateForChef(data);
+  toast(`Added ${business_name}`);
+  renderStaffApp();
+}
+
+/* ----- THIS WEEK SUMMARY (for Em's email) + low-stock flags -----
+   Pre-cap version, still used until the 2026-10-31 migration is run. */
 function renderSummaryView(){
+  if(capReady) return renderCapSummaryView();
   const board = computeAvailabilityBoard();
   // low stock flag: demand from pending/confirmed orders this week vs predicted supply
   const demandBySpecies = {};
+  const demandWeek = weekStartISO(currentDeliveryThursday());
   for(const o of allOrders){
-    if(o.status==='cancelled') continue;
+    if(o.status==='cancelled' || weekStartISO(o.requested_date)!==demandWeek) continue;
     for(const item of (o.mn_order_items||[])) demandBySpecies[item.species]=(demandBySpecies[item.species]||0)+item.qty_kg;
   }
   const rows = board.map(e=>{
@@ -1669,6 +2051,7 @@ function renderSummaryView(){
   return `
     <div class="card" style="margin-bottom:18px">
       <div class="section-title">${currentDeliveryThursdayLabel()}</div>
+      <div style="font-size:12px;color:var(--warn);margin-bottom:8px">Availability caps are switched off until the 2026-10-31 database update is run.</div>
       ${rows || '<div class="empty-state">Nothing fruiting right now.</div>'}
       <button class="btn btn-ghost" style="margin-top:14px" onclick="copySummary(\`${copyText.replace(/`/g,'')}\`)">Copy as text</button>
     </div>
@@ -1858,20 +2241,7 @@ function farmersSelectionHintHTML(qtyKg, chefId){
   return `<div style="font-size:12px;color:var(--muted);margin-top:2px">↳ Suggested mix for this chef right now: ${txt} <span style="opacity:.7">— updates live, decide the real mix at pack time</span></div>`;
 }
 function renderOrdersView(){
-  const logFormHtml = `
-    <div class="card" style="margin-bottom:18px">
-      <div class="section-title">Log an order on a chef's behalf</div>
-      <label for="staff_order_chef">Chef</label>
-      <select id="staff_order_chef" onchange="renderDraftLines()">${chefs.map(c=>`<option value="${c.id}">${c.business_name}</option>`).join("")}</select>
-      <label for="staff_order_species">Species</label>
-      <select id="staff_order_species">${priceList.map(p=>`<option value="${p.species}">${p.species}</option>`).join("")}</select>
-      <label for="staff_order_qty">Quantity (kg)</label>
-      <input id="staff_order_qty" type="number" min="0" step="0.5">
-      <button class="btn btn-primary" onclick="staffAddOrderLine()">Add line to draft order</button>
-      <div id="staffDraftLines" style="margin-top:14px"></div>
-      <button class="btn btn-ghost hidden" id="staffSubmitOrderBtn" onclick="staffSubmitOrder()" style="margin-top:10px">Submit order</button>
-    </div>
-  `;
+  const logFormHtml = `<div class="card" id="staffOrderForm" style="margin-bottom:18px">${renderStaffOrderForm()}</div>`;
   const ordersHtml = allOrders.length ? allOrders.map(o=>{
     const items=o.mn_order_items||[];
     const total=items.reduce((s,i)=> s + (i.unit_price_per_kg ? i.unit_price_per_kg*i.qty_kg : 0), 0);
@@ -1901,7 +2271,7 @@ function renderOrdersView(){
             ${i.species==='Farmers Selection'?farmersSelectionHintHTML(i.qty_kg, o.chef_id):''}
           </div>`).join("")}
           <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-            <select id="add_staff_orderitem_sp_${o.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escSpecies(p.species)}">${p.species}</option>`).join("")}</select>
+            <select id="add_staff_orderitem_sp_${o.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escAttr(p.species)}">${p.species}</option>`).join("")}</select>
             <input type="number" min="0" step="0.5" id="add_staff_orderitem_qty_${o.id}" placeholder="kg" style="width:80px">
             <button class="btn btn-ghost btn-sm" onclick="staffAddOrderItem('${o.id}')">Add</button>
           </div>
@@ -1945,29 +2315,43 @@ let staffDraftOrder=[];
 function staffAddOrderLine(){
   const species=$("staff_order_species").value;
   const qty=parseFloat($("staff_order_qty").value);
+  if(!species){ toast("Pick a species"); return; }
   if(!qty||qty<=0){ toast("Enter a quantity"); return; }
-  staffDraftOrder.push({species,qty_kg:qty});
+  const same=staffDraftOrder.find(l=>l.species===species);
+  if(same) same.qty_kg+=qty; else staffDraftOrder.push({species,qty_kg:qty});
   $("staff_order_qty").value="";
   renderDraftLines();
+  $("staff_order_qty").focus();
 }
 function renderDraftLines(){
-  const chef=chefs.find(c=>c.id===$("staff_order_chef")?.value);
-  const lines = staffDraftOrder.map((l,i)=>`<div class="order-item-row"><span>${l.species}</span><span class="mono">${fmtKg(l.qty_kg)}kg <button onclick="removeDraftLine(${i})" style="color:var(--danger);margin-left:8px">✕</button></span></div>`).join("");
+  const el=$("staffDraftLines"); if(!el) return;
+  const chef=chefs.find(c=>c.id===staffOrderChefId);
+  const cap=staffCap();
+  const lines = staffDraftOrder.map((l,i)=>{
+    const left=capLeftFor(cap, l.species);
+    const flag = left==null ? '' : left < -0.05
+      ? `<div style="font-size:12px;color:var(--danger)">Over what's available by ${fmtKg(-left)}kg</div>`
+      : `<div style="font-size:12px;color:var(--muted)">${fmtKg(left)}kg still left after this</div>`;
+    return `<div class="order-item-row" style="display:block"><div style="display:flex;justify-content:space-between"><span>${esc(l.species)}</span><span class="mono">${fmtKg(l.qty_kg)}kg <button onclick="removeDraftLine(${i})" style="color:var(--danger);margin-left:8px;border:none;background:none">✕</button></span></div>${flag}</div>`;
+  }).join("");
   const feeLine = staffDraftOrder.length ? `<div class="order-item-row" style="color:var(--muted)"><span>Delivery (${DELIVERY_ZONE_LABELS[chef?.delivery_zone]||DELIVERY_ZONE_LABELS.standard})</span><span class="mono">$${deliveryFeeFor(chef).toFixed(2)}</span></div>` : '';
-  $("staffDraftLines").innerHTML = lines + feeLine;
-  $("staffSubmitOrderBtn").classList.toggle("hidden", staffDraftOrder.length===0);
+  el.innerHTML = lines + feeLine;
+  $("staffSubmitOrderBtn")?.classList.toggle("hidden", staffDraftOrder.length===0);
 }
 function removeDraftLine(i){ staffDraftOrder.splice(i,1); renderDraftLines(); }
 async function staffSubmitOrder(){
-  const chef_id=$("staff_order_chef").value;
-  if(!chef_id||!staffDraftOrder.length) return;
-  const chef=chefs.find(c=>c.id===chef_id);
-  const {data:order,error}=await db.from("mn_orders").insert({chef_id, order_source:'staff', status:'confirmed', requested_date: currentDeliveryThursday(chef?.delivery_zone), delivery_fee: deliveryFeeFor(chef)}).select().single();
-  if(error){ toast("Couldn't save order: "+error.message); return; }
+  const chef=chefs.find(c=>c.id===staffOrderChefId);
+  if(!chef||!staffDraftOrder.length||!staffOrderDate) return;
+  const over=capOverages(staffCap(), staffDraftOrder.map(l=>({item:l.species, kg:l.qty_kg})));
+  if(over.length && !confirm(`This goes over what's available for that week:\n${over.map(o=>`• ${o.item}: over by ${fmtKg(o.over)}kg`).join("\n")}\n\nSave it anyway?`)) return;
+  const btn=$("staffSubmitOrderBtn"); if(btn) btn.disabled=true;
+  const {data:order,error}=await db.from("mn_orders").insert({chef_id:chef.id, order_source:'staff', status:'confirmed', requested_date:staffOrderDate, notes:staffOrderNotes.trim()||null, delivery_fee: deliveryFeeFor(chef)}).select().single();
+  if(error){ toast("Couldn't save order: "+error.message); if(btn) btn.disabled=false; return; }
   const rows=staffDraftOrder.map(l=>({order_id:order.id, species:l.species, qty_kg:l.qty_kg, unit_price_per_kg: effectivePrice(priceFor(l.species))}));
-  await db.from("mn_order_items").insert(rows);
-  staffDraftOrder=[];
-  toast("Order logged");
+  const {error:itemErr}=await db.from("mn_order_items").insert(rows);
+  if(itemErr){ toast("Order saved but its items didn't: "+itemErr.message); }
+  else toast(`Order saved for ${chef.business_name}, ${fmtDayDate(staffOrderDate)}`);
+  staffDraftOrder=[]; staffOrderNotes="";
   await loadStaffOnlyData();
   renderStaffApp();
 }
