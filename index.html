@@ -93,6 +93,7 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .pill.warn{background:var(--warn-bg);color:var(--warn)}
 .pill.danger{background:var(--danger-bg);color:var(--danger)}
 .pill.muted{background:var(--blush);color:var(--brown)}
+.pill.standing{background:#E4E9F2;color:#3E5A82;font-size:11px;padding:2px 8px;margin-left:6px;vertical-align:middle}
 .spinner{width:22px;height:22px;border:3px solid var(--blush);border-top-color:var(--maroon);border-radius:50%;animation:spin .7s linear infinite;margin:30px auto}
 @keyframes spin{to{transform:rotate(360deg)}}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--brown);color:#fff;padding:12px 22px;border-radius:30px;font-size:13px;font-weight:600;box-shadow:var(--shadow-lift);z-index:200;opacity:0;transition:opacity .25s ease}
@@ -269,7 +270,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.60"; // pre-launch build; 1.0 = first real launch — "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.61"; // pre-launch build; 1.0 = first real launch — "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -1280,7 +1281,7 @@ function renderHistoryView(){
     return `<div class="card" style="margin-bottom:14px">
       <div class="order-card-top">
         <div>
-          <div style="font-weight:700">${new Date(o.created_at).toLocaleDateString('en-AU',{day:'numeric',month:'short'})} · for ${new Date(o.requested_date).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}</div>
+          <div style="font-weight:700">${new Date(o.created_at).toLocaleDateString('en-AU',{day:'numeric',month:'short'})} · for ${new Date(o.requested_date).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}${standingPill(o)}</div>
           <div style="font-size:12px;color:var(--muted)">${items.length} item${items.length===1?'':'s'}</div>
         </div>
         <span class="pill ${STATUS_PILL[o.status]||'muted'}">${o.status}</span>
@@ -1826,6 +1827,9 @@ function overdueOrders(){
 function orderLineSummary(o){
   return (o.mn_order_items||[]).map(i=>`${esc(i.species)} ${fmtKg(i.qty_kg)}kg`).join(' · ') || 'No items';
 }
+// Orders created from a standing order (mn_place_standing_orders) - shown
+// next to the customer name everywhere an order is listed.
+function standingPill(o){ return o.order_source==='standing' ? '<span class="pill standing" title="Made from a standing order">↻ Standing</span>' : ''; }
 function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 function renderCapSummaryView(){
@@ -1893,7 +1897,7 @@ function renderCapSummaryView(){
       <div class="section-title">${fmtDayDate(day,{weekday:'long',day:'numeric',month:'short'})} · ${os.length} order${os.length===1?'':'s'}</div>
       <div style="font-size:13px;margin-bottom:10px"><b>Pick:</b> ${Object.entries(pick).sort((a,b)=>b[1]-a[1]).map(([s,k])=>`${esc(s)} <span class="mono">${fmtKg(k)}kg</span>`).join(' · ')}</div>
       ${os.map(o=>`<div class="order-item-row" style="align-items:center;gap:10px">
-        <span><b>${esc(o.mn_chefs?.business_name||'Unknown')}</b> <span style="color:var(--muted);font-size:12px">${orderLineSummary(o)}</span></span>
+        <span><b>${esc(o.mn_chefs?.business_name||'Unknown')}</b>${standingPill(o)} <span style="color:var(--muted);font-size:12px">${orderLineSummary(o)}</span></span>
         <span style="display:flex;align-items:center;gap:8px;flex-shrink:0">
           <span class="pill ${STATUS_PILL[o.status]||'muted'}">${o.status}</span>
           ${o.status!=='fulfilled'?`<button class="btn btn-ghost btn-sm" onclick="markOrderFulfilled('${o.id}')">Fulfilled</button>`:''}
@@ -1906,7 +1910,7 @@ function renderCapSummaryView(){
   const overdueHtml = overdue.length ? `<div class="card" style="margin-bottom:18px;border:1.5px solid var(--warn)">
       <div class="section-title">Past delivery date, not ticked off (${overdue.length})</div>
       ${overdue.map(o=>`<div class="order-item-row" style="align-items:center;gap:10px">
-        <span><b>${esc(o.mn_chefs?.business_name||'Unknown')}</b> · ${fmtDayDate(o.requested_date)} <span style="color:var(--muted);font-size:12px">${orderLineSummary(o)}</span></span>
+        <span><b>${esc(o.mn_chefs?.business_name||'Unknown')}</b>${standingPill(o)} · ${fmtDayDate(o.requested_date)} <span style="color:var(--muted);font-size:12px">${orderLineSummary(o)}</span></span>
         <span style="display:flex;gap:6px;flex-shrink:0">
           <button class="btn btn-ghost btn-sm" onclick="markOrderFulfilled('${o.id}')">Fulfilled</button>
           <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="updateOrderStatus('${o.id}','cancelled')">Cancelled</button>
@@ -2257,7 +2261,7 @@ function renderOrdersView(){
     if(editingOrderId===o.id){
       return `<div class="card" style="margin-bottom:14px;border:1.5px solid var(--warn)">
         <div class="order-card-top">
-          <div style="font-weight:700">Editing — ${o.mn_chefs?.business_name||'Unknown chef'}, for ${new Date(o.requested_date).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}</div>
+          <div style="font-weight:700">Editing — ${o.mn_chefs?.business_name||'Unknown chef'}, for ${new Date(o.requested_date).toLocaleDateString('en-AU',{day:'numeric',month:'short'})}${standingPill(o)}</div>
           <span class="pill ${STATUS_PILL[o.status]||'muted'}">${o.status}</span>
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px">
@@ -2294,7 +2298,7 @@ function renderOrdersView(){
     return `<div class="card" style="margin-bottom:14px">
       <div class="order-card-top">
         <div>
-          <div style="font-weight:700">${o.mn_chefs?.business_name||'Unknown chef'}</div>
+          <div style="font-weight:700">${o.mn_chefs?.business_name||'Unknown chef'}${standingPill(o)}</div>
           <div style="font-size:12px;color:var(--muted)">Ordered ${new Date(o.created_at).toLocaleDateString('en-AU',{day:'numeric',month:'short'})} · for ${new Date(o.requested_date).toLocaleDateString('en-AU',{day:'numeric',month:'short'})} · ${o.order_source==='staff'?'logged by staff':o.order_source==='standing'?'recurring order':'self-ordered'}</div>
         </div>
         <select onchange="updateOrderStatus('${o.id}', this.value)" style="width:auto;padding:6px 10px">
@@ -2328,7 +2332,7 @@ function renderOrdersView(){
         const kg = os.filter(o=>o.status!=='cancelled').reduce((t,o)=>t+(o.mn_order_items||[]).reduce((u,i)=>u+Number(i.qty_kg),0),0);
         return `<div class="section-title" style="margin-top:6px">${m} · ${os.length} order${os.length===1?'':'s'} · ${fmtKg(kg)}kg</div>` +
           os.map(o=>editingOrderId===o.id ? orderCard(o) : `<div class="order-item-row" style="align-items:center;gap:10px;padding:8px 2px">
-            <span><b>${esc(o.mn_chefs?.business_name||'Unknown')}</b> · ${fmtDayDate(o.requested_date)} <span style="color:var(--muted);font-size:12px">${orderLineSummary(o)}</span></span>
+            <span><b>${esc(o.mn_chefs?.business_name||'Unknown')}</b>${standingPill(o)} · ${fmtDayDate(o.requested_date)} <span style="color:var(--muted);font-size:12px">${orderLineSummary(o)}</span></span>
             <span style="display:flex;align-items:center;gap:6px;flex-shrink:0"><span class="pill ${STATUS_PILL[o.status]||'muted'}">${o.status}</span><button class="btn btn-ghost btn-sm" style="width:auto" onclick="editingOrderId='${o.id}'; renderStaffApp()">Edit</button></span>
           </div>`).join("");
       }).join("");
