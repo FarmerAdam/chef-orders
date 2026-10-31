@@ -93,8 +93,20 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .pill.warn{background:var(--warn-bg);color:var(--warn)}
 .pill.danger{background:var(--danger-bg);color:var(--danger)}
 .pill.muted{background:var(--blush);color:var(--brown)}
-.orders-split{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
-@media (max-width:760px){.orders-split{grid-template-columns:1fr}}
+.orders-readout{display:flex;gap:28px;align-items:flex-end;flex-wrap:wrap;margin-bottom:18px}
+.orders-readout .num{font-size:34px;font-weight:800;line-height:1.1}
+.orders-readout .lbl{font-size:12px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
+/* Standing and one-off cards pair up row by row (2026-10-31) - each item
+   gets an explicit row on wide screens so the tiles line up left to right;
+   on phones it's one column in DOM order (all standing, then one-offs). */
+.orders-split{display:grid;grid-template-columns:1fr;gap:14px;align-items:stretch}
+.orders-split > .card{margin-bottom:0 !important}
+.orders-split > .section-title{margin:0}
+@media (min-width:761px){
+  .orders-split{grid-template-columns:1fr 1fr;column-gap:20px}
+  .orders-split > .split-l{grid-column:1;grid-row:var(--r)}
+  .orders-split > .split-r{grid-column:2;grid-row:var(--r)}
+}
 .so-run{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--cream);font-size:13px}
 .pill.standing{background:#E4E9F2;color:#3E5A82;font-size:11px;padding:2px 8px;margin-left:6px;vertical-align:middle}
 .spinner{width:22px;height:22px;border:3px solid var(--blush);border-top-color:var(--maroon);border-radius:50%;animation:spin .7s linear infinite;margin:30px auto}
@@ -273,7 +285,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.63"; // pre-launch build; 1.0 = first real launch — Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.64"; // pre-launch build; 1.0 = first real launch — Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -1522,10 +1534,10 @@ function standingCustomerCard(chef, so, runs, orderCard){
   </div>`;
 }
 function renderNewStandingForm(){
-  if(!showNewStanding) return `<button class="btn btn-ghost" style="width:auto;margin:0 0 14px" onclick="showNewStanding=true; renderStaffApp()">+ New standing order</button>`;
+  if(!showNewStanding) return '';
   if(!staffStandingChefId && chefs.length) staffStandingChefId = chefs[0].id;
   const draftLines = staffStandingDraft.map((l,i)=>`<div class="order-item-row"><span>${esc(l.species)}</span><span class="mono">${fmtKg(l.qty_kg)}kg <button onclick="removeStaffStandingDraftLine(${i})" style="color:var(--danger);margin-left:8px;border:none;background:none">✕</button></span></div>`).join("");
-  return `<div class="card" style="margin-bottom:14px">
+  return `<div class="card">
     <div class="section-title">New standing order</div>
     <label for="staff_standing_chef">Customer</label>
     <select id="staff_standing_chef" onchange="staffStandingChefId=this.value">${chefs.map(c=>`<option value="${c.id}" ${c.id===staffStandingChefId?'selected':''}>${esc(c.business_name)}</option>`).join("")}</select>
@@ -1671,7 +1683,7 @@ async function setSpeciesPref(species, preference){
 
 /* ================= STAFF APP ================= */
 let allOrders=[], allStandingOrders=[], chefRequests=[], allChefPrefs=[], marketRuns=[], farmCosts=[];
-let staffTab="summary";
+let staffTab="orders";
 
 async function loadStaffOnlyData(){
   const [c, o, r, sp, mr, fc, so] = await Promise.all([
@@ -1703,8 +1715,8 @@ function prefForChef(chefId, species){
 function renderStaffApp(){
   $("mainContent").innerHTML = `
     <div class="tabs">
-      <button class="tab ${staffTab==='summary'?'active':''}" onclick="setStaffTab('summary')">This week</button>
       <button class="tab ${staffTab==='orders'||staffTab==='standing'?'active':''}" onclick="setStaffTab('orders')">Orders ${pendingCount()?`(${pendingCount()})`:''}</button>
+      <button class="tab ${staffTab==='summary'?'active':''}" onclick="setStaffTab('summary')">Details</button>
       <button class="tab ${staffTab==='market'?'active':''}" onclick="setStaffTab('market')">Market</button>
       <button class="tab ${staffTab==='chefs'?'active':''}" onclick="setStaffTab('chefs')">Chefs ${chefRequests.length?`(${chefRequests.length})`:''}</button>
       <button class="tab ${staffTab==='prices'?'active':''}" onclick="setStaffTab('prices')">Prices</button>
@@ -2372,10 +2384,13 @@ function renderOrdersView(){
   const standingChefIds = new Set(customers.map(x=>x.chef.id));
   const isRun = o => o.order_source==='standing' && standingChefIds.has(o.chef_id);
   const oneOff = current.filter(o=>!isRun(o));
-  const standingHtml = renderNewStandingForm() + (customers.length
-    ? customers.map(({chef, so})=>standingCustomerCard(chef, so, current.filter(o=>isRun(o) && o.chef_id===chef.id), orderCard)).join("")
-    : `<div class="card empty-state">No standing orders yet.</div>`);
-  const oneOffHtml = oneOff.length ? oneOff.map(orderCard).join("") : `<div class="card empty-state">No one-off orders to deliver.</div>`;
+  const leftCards = customers.length
+    ? customers.map(({chef, so})=>standingCustomerCard(chef, so, current.filter(o=>isRun(o) && o.chef_id===chef.id), orderCard))
+    : [`<div class="card"><div class="empty-state">No standing orders yet.</div></div>`];
+  const rightCards = oneOff.length ? oneOff.map(orderCard) : [`<div class="card"><div class="empty-state">No one-off orders to deliver.</div></div>`];
+  const form = renderNewStandingForm();
+  const first = form ? 3 : 2; // row 1 = headings, row 2 = the new-standing form when open
+  const place = (html, side, row) => html.replace(/^\s*<div class="card"/, `<div class="card split-${side}" style="--r:${row}"`).replace('class="card split-'+side+'" style="--r:'+row+'" style="', 'class="card split-'+side+'" style="--r:'+row+';');
   let pastHtml = '';
   if(past.length){
     pastHtml = `<button class="btn btn-ghost" style="width:auto;margin:6px 0 14px" onclick="showPastOrders=!showPastOrders; renderStaffTab()">${showPastOrders?'Hide':'Show'} past orders (${past.length})</button>`;
@@ -2392,10 +2407,34 @@ function renderOrdersView(){
       }).join("");
     }
   }
-  return logFormHtml + `<div class="orders-split">
-      <div><div class="section-title">Standing orders (${customers.filter(x=>x.so.active).length})</div>${standingHtml}</div>
-      <div><div class="section-title">One-off orders (${oneOff.length})</div>${oneOffHtml}</div>
+  return renderOrdersReadout() + logFormHtml + `<div class="orders-split">
+      <div class="section-title split-l" style="--r:1;display:flex;justify-content:space-between;align-items:center;gap:8px">Standing orders (${customers.filter(x=>x.so.active).length})
+        ${form?'':`<button class="btn btn-ghost btn-sm" style="width:auto" onclick="showNewStanding=true; renderStaffApp()">+ New</button>`}</div>
+      ${form?place(form,'l',2):''}
+      ${leftCards.map((h,i)=>place(h,'l',first+i)).join("")}
+      <div class="section-title split-r" style="--r:1;align-self:center">One-off orders (${oneOff.length})</div>
+      ${rightCards.map((h,i)=>place(h,'r',first+i)).join("")}
     </div>` + pastHtml;
+}
+/* Big two-number readout at the top of Orders (2026-10-31): total kg
+   ordered for the next delivery week (orders + standing orders not placed
+   yet) and what's left to sell wholesale after the market reserve. The
+   per-species detail is on the Details tab. */
+function renderOrdersReadout(){
+  const next = upcomingDeliveryDates(1)[0];
+  if(!next) return '';
+  const ws = weekStartISO(next);
+  const data = weekAvail[ws];
+  if(!data) return '';
+  const ordered = (data.committed||[]).reduce((t,c)=>t+(Number(c.kg)||0),0);
+  const cap = computeCap(data);
+  const over = cap ? cap.rows.reduce((t,r)=>t+Math.max(0,-r.left),0) + Object.values(cap.bundles).reduce((t,b)=>t+b.over,0) : 0;
+  const weekLabel = `${fmtDayDate(ws,{day:'numeric',month:'short'})} – ${fmtDayDate(addDaysISO(ws,6),{day:'numeric',month:'short'})}`;
+  return `<div class="card orders-readout">
+    <div><div class="num">${fmtKg(ordered)}kg</div><div class="lbl">Ordered</div></div>
+    <div><div class="num" style="color:${!cap?'var(--muted)':cap.totalLeft<1?'var(--danger)':'var(--good)'}">${cap?fmtKg(cap.totalLeft)+'kg':'—'}</div><div class="lbl">Left${over>0.05?` · <span style="color:var(--danger)">${fmtKg(over)}kg over</span>`:''}</div></div>
+    <div style="margin-left:auto;font-size:12px;color:var(--muted);align-self:center">Week of ${weekLabel}${cap?'':' · no MAVIS forecast yet'}</div>
+  </div>`;
 }
 
 let staffDraftOrder=[];
