@@ -93,6 +93,9 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .pill.warn{background:var(--warn-bg);color:var(--warn)}
 .pill.danger{background:var(--danger-bg);color:var(--danger)}
 .pill.muted{background:var(--blush);color:var(--brown)}
+.orders-split{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
+@media (max-width:760px){.orders-split{grid-template-columns:1fr}}
+.so-run{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--cream);font-size:13px}
 .pill.standing{background:#E4E9F2;color:#3E5A82;font-size:11px;padding:2px 8px;margin-left:6px;vertical-align:middle}
 .spinner{width:22px;height:22px;border:3px solid var(--blush);border-top-color:var(--maroon);border-radius:50%;animation:spin .7s linear infinite;margin:30px auto}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -270,7 +273,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.62"; // pre-launch build; 1.0 = first real launch — "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.63"; // pre-launch build; 1.0 = first real launch — Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -1449,77 +1452,95 @@ function useStandingOrder(id){
 }
 
 /* ----- STAFF: standing orders on a chef's behalf ----- */
-let staffStandingChefId=null, staffStandingDraft=[];
-function renderStaffStandingView(){
-  if(!staffStandingChefId && chefs.length) staffStandingChefId = chefs[0].id;
-  const chef = chefs.find(c=>c.id===staffStandingChefId);
-  const chefOptions = chefs.map(c=>`<option value="${c.id}" ${c.id===staffStandingChefId?'selected':''}>${c.business_name}</option>`).join("");
-  const sosForChef = allStandingOrders.filter(so=>so.chef_id===staffStandingChefId);
-  const thu = currentDeliveryThursday(chef?.delivery_zone);
-  const thuLabel = new Date(thu).toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'short'});
-
-  const list = sosForChef.map(so=>{
-    const items = so.mn_standing_order_items||[];
-    const isActive = !!so.active;
-    const isSkipping = so.skip_date === thu;
-    return `<div class="card" style="margin-bottom:14px${isActive?';border:1.5px solid var(--good)':''}">
-      <div class="order-card-top">
-        <div>
-          <div style="font-weight:700">${so.name}</div>
-          ${isActive?`<div style="font-size:12px;color:var(--good)">Active recurring order${isSkipping?` — skipping ${thuLabel}`:''}</div>`:''}
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${isActive
-            ? `<button class="btn btn-ghost btn-sm" onclick="staffDeactivateStandingOrder('${so.id}')">Deactivate</button>`
-            : `<button class="btn btn-primary btn-sm" onclick="staffActivateStandingOrder('${staffStandingChefId}','${so.id}')">Make this their recurring order</button>`}
-        </div>
-      </div>
-      <div style="margin-top:10px">
-        ${items.map(i=>`<div class="order-item-row">
-          <span>${i.species}</span>
-          <span style="display:flex;align-items:center;gap:8px">
-            <input type="number" min="0" step="0.5" class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="staffUpdateStandingItem('${i.id}',this.value)">
-            <button onclick="staffRemoveStandingItem('${i.id}')" style="color:var(--danger);border:none;background:none">✕</button>
-          </span>
-        </div>`).join("")}
-        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-          <select id="staff_add_item_sp_${so.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escAttr(p.species)}">${p.species}</option>`).join("")}</select>
-          <input type="number" min="0" step="0.5" id="staff_add_item_qty_${so.id}" placeholder="kg" style="width:80px">
-          <button class="btn btn-ghost btn-sm" onclick="staffAddStandingItem('${so.id}')">Add</button>
-        </div>
-      </div>
-      ${isActive?`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--cream)">
-        ${isSkipping
-          ? `<button class="btn btn-ghost btn-sm" onclick="staffUnskipStandingOrder('${so.id}')">Cancel skip — include ${thuLabel} after all</button>`
-          : `<button class="btn btn-ghost btn-sm" onclick="staffSkipStandingOrder('${so.id}','${thu}')">Skip ${thuLabel} only</button>`}
-      </div>`:''}
-    </div>`;
-  }).join("");
-
-  const draftLines = staffStandingDraft.map((l,i)=>`<div class="order-item-row"><span>${l.species}</span><span class="mono">${fmtKg(l.qty_kg)}kg <button onclick="removeStaffStandingDraftLine(${i})" style="color:var(--danger);margin-left:8px">✕</button></span></div>`).join("");
-
-  return `
-    <div class="card" style="margin-bottom:18px">
-      <div class="section-title">Standing orders</div>
-      <label for="staff_standing_chef">Chef</label>
-      <select id="staff_standing_chef" onchange="setStaffStandingChef(this.value)">${chefOptions}</select>
-    </div>
-    <div class="card" style="margin-bottom:18px">
-      <div class="section-title">Create a new standing order</div>
-      <label for="staff_standing_name">Name</label>
-      <input id="staff_standing_name" placeholder="Usual order">
-      <label for="staff_standing_species">Species</label>
-      <select id="staff_standing_species">${priceList.map(p=>`<option value="${p.species}">${p.species}</option>`).join("")}</select>
-      <label for="staff_standing_qty">Quantity (kg)</label>
-      <input id="staff_standing_qty" type="number" min="0" step="0.5">
-      <button class="btn btn-primary" onclick="addStaffStandingDraftLine()">Add line</button>
-      <div style="margin-top:14px">${draftLines}</div>
-      <button class="btn btn-ghost ${staffStandingDraft.length?'':'hidden'}" onclick="staffCreateStandingOrder()" style="margin-top:10px">Save standing order</button>
-    </div>
-    ${list || `<div class="card empty-state">No standing orders for this chef yet.</div>`}
-  `;
+let staffStandingChefId=null, staffStandingDraft=[], editingStandingId=null, showNewStanding=false;
+/* Standing orders live on the Orders tab now, left column, one card per
+   customer (2026-10-31, Adam: one tab, standing left / one-offs right).
+   Each customer has at most one standing order - replacing it deletes the
+   old one rather than keeping it switched off. A card shows what they get
+   every week, and under it the deliveries already placed from it that
+   still need ticking off. */
+function weekdayName(n){ return new Date(2026,0,4+n).toLocaleDateString('en-AU',{weekday:'long'}); } // 4 Jan 2026 is a Sunday
+function standingCustomers(){
+  const byChef = {};
+  for(const so of allStandingOrders){
+    const cur = byChef[so.chef_id];
+    if(!cur || (so.active && !cur.active) || (!!so.active===!!cur.active && so.created_at>cur.created_at)) byChef[so.chef_id]=so;
+  }
+  return Object.values(byChef).map(so=>({so, chef:chefs.find(c=>c.id===so.chef_id)})).filter(x=>x.chef)
+    .sort((a,b)=>(!!b.so.active - !!a.so.active) || a.chef.business_name.localeCompare(b.chef.business_name));
 }
-function setStaffStandingChef(id){ staffStandingChefId=id; staffStandingDraft=[]; renderStaffApp(); }
+function standingCustomerCard(chef, so, runs, orderCard){
+  const items = so.mn_standing_order_items||[];
+  const zoneDay = ZONE_DELIVERY_WEEKDAY[chef.delivery_zone] ?? ZONE_DELIVERY_WEEKDAY.standard;
+  const thu = currentDeliveryThursday(chef.delivery_zone);
+  const thuLabel = new Date(thu+'T00:00:00').toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short'});
+  const isSkipping = so.active && so.skip_date===thu;
+  const kg = items.reduce((t,i)=>t+Number(i.qty_kg),0);
+  const summary = items.map(i=>`${esc(i.species)} ${fmtKg(i.qty_kg)}kg`).join(' · ') || 'No items';
+  const editing = editingStandingId===so.id;
+  const today = todayISO();
+  const runRows = runs.map(o=> editingOrderId===o.id ? `<div style="margin-top:10px">${orderCard(o)}</div>` : `<div class="so-run">
+      <span>${fmtDayDate(o.requested_date)}${o.requested_date<today?' <span class="pill danger" style="font-size:11px;padding:2px 8px">overdue</span>':''}${orderLineSummary(o)!==summary?` <span style="color:var(--muted)">${orderLineSummary(o)}</span>`:''}</span>
+      <span style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+        <select onchange="updateOrderStatus('${o.id}', this.value)" style="width:auto;padding:4px 8px">${['pending','confirmed','fulfilled','cancelled'].map(st=>`<option value="${st}" ${o.status===st?'selected':''}>${st}</option>`).join("")}</select>
+        <button class="btn btn-ghost btn-sm" style="width:auto" onclick="editingOrderId='${o.id}'; renderStaffApp()">Edit</button>
+      </span>
+    </div>`).join("");
+  const editor = `<div style="margin-top:10px">
+      ${items.map(i=>`<div class="order-item-row">
+        <span>${esc(i.species)}</span>
+        <span style="display:flex;align-items:center;gap:8px">
+          <input type="number" min="0" step="0.5" class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="staffUpdateStandingItem('${i.id}',this.value)">
+          <button onclick="staffRemoveStandingItem('${i.id}')" style="color:var(--danger);border:none;background:none">✕</button>
+        </span>
+      </div>`).join("")}
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <select id="staff_add_item_sp_${so.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escAttr(p.species)}">${esc(p.species)}</option>`).join("")}</select>
+        <input type="number" min="0" step="0.5" id="staff_add_item_qty_${so.id}" placeholder="kg" style="width:80px">
+        <button class="btn btn-ghost btn-sm" style="width:auto" onclick="staffAddStandingItem('${so.id}')">Add</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        ${so.active
+          ? (isSkipping
+              ? `<button class="btn btn-ghost btn-sm" style="width:auto" onclick="staffUnskipStandingOrder('${so.id}')">Include ${thuLabel} after all</button>`
+              : `<button class="btn btn-ghost btn-sm" style="width:auto" onclick="staffSkipStandingOrder('${so.id}','${thu}')">Skip ${thuLabel} only</button>`)
+            + `<button class="btn btn-ghost btn-sm" style="width:auto" onclick="staffDeactivateStandingOrder('${so.id}')">Pause</button>`
+          : `<button class="btn btn-primary btn-sm" style="width:auto" onclick="staffActivateStandingOrder('${so.chef_id}','${so.id}')">Resume</button>`}
+        <button class="btn btn-ghost btn-sm" style="width:auto;color:var(--danger)" onclick="staffDeleteStandingOrder('${so.id}')">Delete</button>
+      </div>
+    </div>`;
+  return `<div class="card" style="margin-bottom:14px${editing?';border:1.5px solid var(--warn)':''}">
+    <div class="order-card-top">
+      <div>
+        <div style="font-weight:700">${esc(chef.business_name)}${so.active?'<span class="pill standing">↻ Standing</span>':'<span class="pill muted" style="font-size:11px;padding:2px 8px;margin-left:6px">Paused</span>'}</div>
+        <div style="font-size:12px;color:var(--muted)">Every ${weekdayName(zoneDay)} · ${fmtKg(kg)}kg${isSkipping && !runs.some(o=>o.requested_date===thu)?` · <span style="color:var(--warn)">skipping ${thuLabel}</span>`:''}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" style="width:auto" onclick="editingStandingId=${editing?'null':`'${so.id}'`}; renderStaffApp()">${editing?'Done':'Edit'}</button>
+    </div>
+    ${editing ? editor : `<div style="margin-top:8px;font-size:14px">${summary}</div>`}
+    ${runRows?`<div style="margin-top:10px">${runRows}</div>`:''}
+  </div>`;
+}
+function renderNewStandingForm(){
+  if(!showNewStanding) return `<button class="btn btn-ghost" style="width:auto;margin:0 0 14px" onclick="showNewStanding=true; renderStaffApp()">+ New standing order</button>`;
+  if(!staffStandingChefId && chefs.length) staffStandingChefId = chefs[0].id;
+  const draftLines = staffStandingDraft.map((l,i)=>`<div class="order-item-row"><span>${esc(l.species)}</span><span class="mono">${fmtKg(l.qty_kg)}kg <button onclick="removeStaffStandingDraftLine(${i})" style="color:var(--danger);margin-left:8px;border:none;background:none">✕</button></span></div>`).join("");
+  return `<div class="card" style="margin-bottom:14px">
+    <div class="section-title">New standing order</div>
+    <label for="staff_standing_chef">Customer</label>
+    <select id="staff_standing_chef" onchange="staffStandingChefId=this.value">${chefs.map(c=>`<option value="${c.id}" ${c.id===staffStandingChefId?'selected':''}>${esc(c.business_name)}</option>`).join("")}</select>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <select id="staff_standing_species" style="flex:1;min-width:140px">${priceList.map(p=>`<option value="${escAttr(p.species)}">${esc(p.species)}</option>`).join("")}</select>
+      <input id="staff_standing_qty" type="number" min="0" step="0.5" placeholder="kg" style="width:80px">
+      <button class="btn btn-ghost btn-sm" style="width:auto" onclick="addStaffStandingDraftLine()">Add</button>
+    </div>
+    <div style="margin-top:10px">${draftLines}</div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" style="width:auto" ${staffStandingDraft.length?'':'disabled'} onclick="staffCreateStandingOrder()">Save standing order</button>
+      <button class="btn btn-ghost btn-sm" style="width:auto" onclick="showNewStanding=false; staffStandingDraft=[]; renderStaffApp()">Cancel</button>
+    </div>
+  </div>`;
+}
 function addStaffStandingDraftLine(){
   const species=$("staff_standing_species").value;
   const qty=parseFloat($("staff_standing_qty").value);
@@ -1531,13 +1552,39 @@ function addStaffStandingDraftLine(){
 function removeStaffStandingDraftLine(i){ staffStandingDraft.splice(i,1); renderStaffApp(); }
 async function staffCreateStandingOrder(){
   if(!staffStandingDraft.length){ toast("Add items first"); return; }
-  const name = $("staff_standing_name").value.trim() || "Usual order";
-  const {data:so,error} = await db.from("mn_standing_orders").insert({chef_id:staffStandingChefId, name}).select().single();
+  const chefId = $("staff_standing_chef")?.value || staffStandingChefId;
+  const chef = chefs.find(c=>c.id===chefId);
+  if(allStandingOrders.some(so=>so.chef_id===chefId) && !confirm(`${chef?.business_name||'This customer'} already has a standing order. Replace it with this one?`)) return;
+  const {data:so,error} = await db.from("mn_standing_orders").insert({chef_id:chefId, name:"Usual order", active:false}).select().single();
   if(error){ toast("Couldn't save: "+error.message); return; }
   const rows = staffStandingDraft.map(l=>({standing_order_id:so.id, species:l.species, qty_kg:l.qty_kg}));
-  await db.from("mn_standing_order_items").insert(rows);
-  staffStandingDraft=[];
-  toast("Standing order saved");
+  const {error:itemErr} = await db.from("mn_standing_order_items").insert(rows);
+  if(itemErr){ await db.from("mn_standing_orders").delete().eq("id",so.id); toast("Couldn't save its items: "+itemErr.message); return; }
+  const {error:actErr} = await replaceStandingOrder(chefId, so.id);
+  staffStandingDraft=[]; showNewStanding=false;
+  toast(actErr ? "Saved, but couldn't switch it on: "+actErr.message : `Standing order set for ${chef?.business_name||'them'}`);
+  await loadStaffOnlyData(); renderStaffApp();
+}
+/* Makes newId the customer's one standing order: any older one is deleted
+   (not kept switched off - 2026-10-31, they were only clutter). Orders
+   don't link back to standing orders, so past deliveries are untouched. */
+async function replaceStandingOrder(chefId, newId){
+  const old = allStandingOrders.filter(s=>s.chef_id===chefId && s.id!==newId).map(s=>s.id);
+  if(old.length){
+    await db.from("mn_standing_order_items").delete().in("standing_order_id", old);
+    await db.from("mn_standing_orders").delete().in("id", old);
+  }
+  return db.from("mn_standing_orders").update({active:true}).eq("id",newId);
+}
+async function staffDeleteStandingOrder(id){
+  const so=allStandingOrders.find(s=>s.id===id);
+  const chef=chefs.find(c=>c.id===so?.chef_id);
+  if(!confirm(`Delete ${chef?.business_name||'this customer'}'s standing order? Orders already placed from it stay as they are.`)) return;
+  await db.from("mn_standing_order_items").delete().eq("standing_order_id",id);
+  const {error}=await db.from("mn_standing_orders").delete().eq("id",id);
+  if(error){ toast("Couldn't delete: "+error.message); return; }
+  if(editingStandingId===id) editingStandingId=null;
+  toast("Standing order deleted");
   await loadStaffOnlyData(); renderStaffApp();
 }
 async function staffActivateStandingOrder(chefId, id){
@@ -1657,8 +1704,7 @@ function renderStaffApp(){
   $("mainContent").innerHTML = `
     <div class="tabs">
       <button class="tab ${staffTab==='summary'?'active':''}" onclick="setStaffTab('summary')">This week</button>
-      <button class="tab ${staffTab==='orders'?'active':''}" onclick="setStaffTab('orders')">Orders ${pendingCount()?`(${pendingCount()})`:''}</button>
-      <button class="tab ${staffTab==='standing'?'active':''}" onclick="setStaffTab('standing')">Standing orders</button>
+      <button class="tab ${staffTab==='orders'||staffTab==='standing'?'active':''}" onclick="setStaffTab('orders')">Orders ${pendingCount()?`(${pendingCount()})`:''}</button>
       <button class="tab ${staffTab==='market'?'active':''}" onclick="setStaffTab('market')">Market</button>
       <button class="tab ${staffTab==='chefs'?'active':''}" onclick="setStaffTab('chefs')">Chefs ${chefRequests.length?`(${chefRequests.length})`:''}</button>
       <button class="tab ${staffTab==='prices'?'active':''}" onclick="setStaffTab('prices')">Prices</button>
@@ -1674,8 +1720,7 @@ function pendingCount(){ return allOrders.filter(o=>o.status==='pending').length
 function renderStaffTab(){
   const el=$("staffTabContent");
   if(staffTab==="summary") el.innerHTML = renderSummaryView();
-  else if(staffTab==="orders"){ el.innerHTML = renderOrdersView(); renderDraftLines(); }
-  else if(staffTab==="standing") el.innerHTML = renderStaffStandingView();
+  else if(staffTab==="orders" || staffTab==="standing"){ el.innerHTML = renderOrdersView(); renderDraftLines(); }
   else if(staffTab==="market") el.innerHTML = renderMarketView();
   else if(staffTab==="chefs") el.innerHTML = renderChefsView();
   else if(staffTab==="prices") el.innerHTML = renderPricesView();
@@ -2321,7 +2366,16 @@ function renderOrdersView(){
       </div>
     </div>`;
   };
-  const currentHtml = current.length ? current.map(orderCard).join("") : `<div class="card empty-state">Nothing to deliver right now.</div>`;
+  // Deliveries placed from a standing order sit under that customer's card
+  // on the left; everything else (texts, one-offs, chef self-orders) on the right.
+  const customers = standingCustomers();
+  const standingChefIds = new Set(customers.map(x=>x.chef.id));
+  const isRun = o => o.order_source==='standing' && standingChefIds.has(o.chef_id);
+  const oneOff = current.filter(o=>!isRun(o));
+  const standingHtml = renderNewStandingForm() + (customers.length
+    ? customers.map(({chef, so})=>standingCustomerCard(chef, so, current.filter(o=>isRun(o) && o.chef_id===chef.id), orderCard)).join("")
+    : `<div class="card empty-state">No standing orders yet.</div>`);
+  const oneOffHtml = oneOff.length ? oneOff.map(orderCard).join("") : `<div class="card empty-state">No one-off orders to deliver.</div>`;
   let pastHtml = '';
   if(past.length){
     pastHtml = `<button class="btn btn-ghost" style="width:auto;margin:6px 0 14px" onclick="showPastOrders=!showPastOrders; renderStaffTab()">${showPastOrders?'Hide':'Show'} past orders (${past.length})</button>`;
@@ -2338,15 +2392,18 @@ function renderOrdersView(){
       }).join("");
     }
   }
-  return logFormHtml + `<div class="section-title">Current orders (${current.length})</div>` + currentHtml + pastHtml;
+  return logFormHtml + `<div class="orders-split">
+      <div><div class="section-title">Standing orders (${customers.filter(x=>x.so.active).length})</div>${standingHtml}</div>
+      <div><div class="section-title">One-off orders (${oneOff.length})</div>${oneOffHtml}</div>
+    </div>` + pastHtml;
 }
 
 let staffDraftOrder=[];
 let showPastOrders=false;
 /* "Set as standing order" on an order card (2026-10-31, Adam's ask) - turns
    an order taken by text into the customer's weekly recurring order in one
-   step. Their current active standing order, if any, is switched off (not
-   deleted), same as activating one from the Standing orders tab. The new
+   step. Their current standing order, if any, is replaced (deleted - see
+   replaceStandingOrder). The new
    one skips the week of this order, if that's still to come, so the
    weekly auto-placement doesn't add a second order on top of this one. */
 async function staffSetStandingFromOrder(orderId){
@@ -2356,9 +2413,9 @@ async function staffSetStandingFromOrder(orderId){
   const chef=chefs.find(c=>c.id===o.chef_id);
   const zoneDay=ZONE_DELIVERY_WEEKDAY[chef?.delivery_zone] ?? ZONE_DELIVERY_WEEKDAY.standard;
   const dayName=new Date(2026,0,4+zoneDay).toLocaleDateString('en-AU',{weekday:'long'}); // 4 Jan 2026 is a Sunday
-  const existing=allStandingOrders.find(s=>s.chef_id===o.chef_id && s.active);
+  const existing=allStandingOrders.find(s=>s.chef_id===o.chef_id && s.active) || allStandingOrders.find(s=>s.chef_id===o.chef_id);
   const name=prompt(`Repeat this every ${dayName} for ${chef?.business_name||'this customer'}?\n\n${items.map(i=>`${i.species} ${fmtKg(i.qty_kg)}kg`).join(', ')}`+
-    (existing?`\n\nThis replaces their current standing order "${existing.name}" (kept, just switched off).`:'')+`\n\nName it:`, existing?.name||"Usual order");
+    (existing?`\n\nThis replaces their current standing order (${(existing.mn_standing_order_items||[]).map(i=>`${i.species} ${fmtKg(i.qty_kg)}kg`).join(', ')||'no items'}).`:'')+`\n\nName it:`, existing?.name||"Usual order");
   if(name===null) return;
   const sameWeekDelivery=addDaysISO(weekStartISO(o.requested_date), (zoneDay+6)%7);
   const skip = o.status!=='cancelled' && sameWeekDelivery>=todayISO() ? sameWeekDelivery : null;
@@ -2366,9 +2423,8 @@ async function staffSetStandingFromOrder(orderId){
   if(error){ toast("Couldn't save: "+error.message); return; }
   const {error:itemErr}=await db.from("mn_standing_order_items").insert(items.map(i=>({standing_order_id:so.id, species:i.species, qty_kg:i.qty_kg})));
   if(itemErr){ await db.from("mn_standing_orders").delete().eq("id",so.id); toast("Couldn't save its items: "+itemErr.message); return; }
-  await db.from("mn_standing_orders").update({active:false}).eq("chef_id",o.chef_id);
-  const {error:actErr}=await db.from("mn_standing_orders").update({active:true}).eq("id",so.id);
-  if(actErr){ toast("Saved, but couldn't switch it on: "+actErr.message+" - activate it from the Standing orders tab"); }
+  const {error:actErr}=await replaceStandingOrder(o.chef_id, so.id);
+  if(actErr){ toast("Saved, but couldn't switch it on: "+actErr.message+" - resume it from its card on the Orders tab"); }
   else {
     // This order is now the first of the series - mark it so it gets the
     // Standing pill like the ones mn_place_standing_orders makes later.
