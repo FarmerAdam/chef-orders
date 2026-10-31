@@ -270,7 +270,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.61"; // pre-launch build; 1.0 = first real launch — "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.62"; // pre-launch build; 1.0 = first real launch — "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -2369,7 +2369,12 @@ async function staffSetStandingFromOrder(orderId){
   await db.from("mn_standing_orders").update({active:false}).eq("chef_id",o.chef_id);
   const {error:actErr}=await db.from("mn_standing_orders").update({active:true}).eq("id",so.id);
   if(actErr){ toast("Saved, but couldn't switch it on: "+actErr.message+" - activate it from the Standing orders tab"); }
-  else toast(`Standing order set — placed automatically every ${dayName}${skip?`, starting the week after ${fmtDayDate(skip)}`:''}`);
+  else {
+    // This order is now the first of the series - mark it so it gets the
+    // Standing pill like the ones mn_place_standing_orders makes later.
+    if(o.status!=='cancelled' && o.order_source!=='standing') await db.from("mn_orders").update({order_source:'standing'}).eq("id",o.id);
+    toast(`Standing order set — placed automatically every ${dayName}${skip?`, starting the week after ${fmtDayDate(skip)}`:''}`);
+  }
   await loadStaffOnlyData(); renderStaffApp();
 }
 function staffAddOrderLine(){
