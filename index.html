@@ -97,9 +97,10 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .orders-readout .num{font-size:34px;font-weight:800;line-height:1.1}
 .orders-readout .lbl{font-size:12px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
 /* Standing and one-off cards pair up row by row (2026-10-31) - each item
-   gets an explicit row on wide screens so the tiles line up left to right;
+   gets an explicit row on wide screens so each pair starts at the same
+   height (cards keep their own size, not stretched);
    on phones it's one column in DOM order (all standing, then one-offs). */
-.orders-split{display:grid;grid-template-columns:1fr;gap:14px;align-items:stretch}
+.orders-split{display:grid;grid-template-columns:1fr;gap:14px;align-items:start}
 .orders-split > .card{margin-bottom:0 !important}
 .orders-split > .section-title{margin:0}
 @media (min-width:761px){
@@ -285,7 +286,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.64"; // pre-launch build; 1.0 = first real launch — Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.65"; // pre-launch build; 1.0 = first real launch — standing cards back to their own size, still starting level with the one-off beside them. 0.64: Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
