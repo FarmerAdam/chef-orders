@@ -96,18 +96,15 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .orders-readout{display:flex;gap:28px;align-items:flex-end;flex-wrap:wrap;margin-bottom:18px}
 .orders-readout .num{font-size:34px;font-weight:800;line-height:1.1}
 .orders-readout .lbl{font-size:12px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
-/* Standing and one-off cards pair up row by row (2026-10-31) - each item
-   gets an explicit row on wide screens so each pair starts at the same
-   height (cards keep their own size, not stretched);
-   on phones it's one column in DOM order (all standing, then one-offs). */
-.orders-split{display:grid;grid-template-columns:1fr;gap:14px;align-items:start}
-.orders-split > .card{margin-bottom:0 !important}
-.orders-split > .section-title{margin:0}
-@media (min-width:761px){
-  .orders-split{grid-template-columns:1fr 1fr;column-gap:20px}
-  .orders-split > .split-l{grid-column:1;grid-row:var(--r)}
-  .orders-split > .split-r{grid-column:2;grid-row:var(--r)}
-}
+/* Two independent columns, standing | one-off (2026-10-31). Only the tops
+   line up: both headings are the same height (the left one carries the
+   + New button), so the first card in each column starts level. Stacks on
+   phones, standing first. */
+.orders-split{display:grid;grid-template-columns:1fr;gap:20px;align-items:start}
+@media (min-width:761px){ .orders-split{grid-template-columns:1fr 1fr} }
+.split-col{display:flex;flex-direction:column;gap:14px;min-width:0}
+.split-col > .card{margin-bottom:0 !important}
+.split-head{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:36px;margin:0}
 .so-run{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--cream);font-size:13px}
 .pill.standing{background:#E4E9F2;color:#3E5A82;font-size:11px;padding:2px 8px;margin-left:6px;vertical-align:middle}
 .spinner{width:22px;height:22px;border:3px solid var(--blush);border-top-color:var(--maroon);border-radius:50%;animation:spin .7s linear infinite;margin:30px auto}
@@ -286,7 +283,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.65"; // pre-launch build; 1.0 = first real launch — standing cards back to their own size, still starting level with the one-off beside them. 0.64: Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.66"; // pre-launch build; 1.0 = first real launch — standing / one-off back to two independent columns, only the tops level (no gaps between standing cards). 0.65: standing cards back to their own size, still starting level with the one-off beside them. 0.64: Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -2390,8 +2387,6 @@ function renderOrdersView(){
     : [`<div class="card"><div class="empty-state">No standing orders yet.</div></div>`];
   const rightCards = oneOff.length ? oneOff.map(orderCard) : [`<div class="card"><div class="empty-state">No one-off orders to deliver.</div></div>`];
   const form = renderNewStandingForm();
-  const first = form ? 3 : 2; // row 1 = headings, row 2 = the new-standing form when open
-  const place = (html, side, row) => html.replace(/^\s*<div class="card"/, `<div class="card split-${side}" style="--r:${row}"`).replace('class="card split-'+side+'" style="--r:'+row+'" style="', 'class="card split-'+side+'" style="--r:'+row+';');
   let pastHtml = '';
   if(past.length){
     pastHtml = `<button class="btn btn-ghost" style="width:auto;margin:6px 0 14px" onclick="showPastOrders=!showPastOrders; renderStaffTab()">${showPastOrders?'Hide':'Show'} past orders (${past.length})</button>`;
@@ -2409,12 +2404,15 @@ function renderOrdersView(){
     }
   }
   return renderOrdersReadout() + logFormHtml + `<div class="orders-split">
-      <div class="section-title split-l" style="--r:1;display:flex;justify-content:space-between;align-items:center;gap:8px">Standing orders (${customers.filter(x=>x.so.active).length})
-        ${form?'':`<button class="btn btn-ghost btn-sm" style="width:auto" onclick="showNewStanding=true; renderStaffApp()">+ New</button>`}</div>
-      ${form?place(form,'l',2):''}
-      ${leftCards.map((h,i)=>place(h,'l',first+i)).join("")}
-      <div class="section-title split-r" style="--r:1;align-self:center">One-off orders (${oneOff.length})</div>
-      ${rightCards.map((h,i)=>place(h,'r',first+i)).join("")}
+      <div class="split-col">
+        <div class="section-title split-head">Standing orders (${customers.filter(x=>x.so.active).length})
+          ${form?'':`<button class="btn btn-ghost btn-sm" style="width:auto" onclick="showNewStanding=true; renderStaffApp()">+ New</button>`}</div>
+        ${form}${leftCards.join("")}
+      </div>
+      <div class="split-col">
+        <div class="section-title split-head">One-off orders (${oneOff.length})</div>
+        ${rightCards.join("")}
+      </div>
     </div>` + pastHtml;
 }
 /* Big two-number readout at the top of Orders (2026-10-31): total kg
