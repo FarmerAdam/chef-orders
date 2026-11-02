@@ -107,6 +107,58 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .split-head{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:36px;margin:0}
 .so-run{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--cream);font-size:13px}
 .pill.standing{background:#E4E9F2;color:#3E5A82;font-size:11px;padding:2px 8px;margin-left:6px;vertical-align:middle}
+/* ===== Run sheet (2026-11-03) ===== */
+.run-days{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.run-day{padding:9px 14px;border-radius:20px;border:1.5px solid var(--blush);font-weight:700;font-size:13px;color:var(--maroon);background:#fff}
+.run-day.active{background:var(--maroon);border-color:var(--maroon);color:#fff}
+.run-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.run-head h2{font-size:21px;line-height:1.2}
+.run-sub{font-size:13px;color:var(--muted);font-weight:600;margin-top:2px}
+.run-tools{display:flex;gap:8px;flex-wrap:wrap}
+.run-tools .btn{width:auto}
+.run-load{margin-bottom:14px}
+.run-load-row{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-top:1px solid var(--cream);font-size:14px}
+.run-load-row:first-of-type{border-top:none}
+.run-stop{display:flex;gap:14px;margin-bottom:12px;padding:16px}
+.run-stop.next{outline:2.5px solid var(--maroon)}
+.run-stop.done{opacity:.62}
+.run-num{width:36px;height:36px;border-radius:50%;background:var(--brown);color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center;flex:none;font-family:"Montserrat",sans-serif}
+.run-stop.done .run-num{background:var(--good)}
+.run-body{flex:1;min-width:0}
+.run-name{font-weight:800;font-size:16px;line-height:1.25;overflow-wrap:anywhere}
+.run-addr{font-size:14px;margin-top:2px;overflow-wrap:anywhere}
+.run-instr{font-size:13px;font-weight:600;color:var(--warn);margin-top:3px}
+.run-contact{font-size:13px;color:var(--muted);margin-top:3px}
+.run-items{margin-top:8px;border-top:1px solid var(--cream)}
+.run-item{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--cream);font-size:14px;font-weight:600}
+.run-note{font-size:13px;color:var(--warn);margin-top:6px}
+.run-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.run-actions .btn{width:auto;flex:1 1 120px;min-height:44px;margin:0;text-decoration:none}
+.run-done{font-size:13px;font-weight:700;color:var(--good);margin-top:10px}
+.run-undo{font-size:12px;font-weight:600;color:var(--muted);text-decoration:underline;margin-left:8px;padding:8px 2px}
+.run-check{display:none}
+.route-row{display:flex;gap:12px;padding:14px 0;border-top:1px solid var(--cream)}
+.route-move{display:flex;flex-direction:column;align-items:center;gap:2px;flex:none}
+.route-move button{width:38px;height:34px;border:1.5px solid var(--blush);border-radius:var(--radius-sm);color:var(--maroon);font-weight:800}
+.route-move button:disabled{opacity:.3;cursor:default}
+.route-pos{font-weight:800;font-size:14px}
+.route-fields{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.route-fields input{padding:8px 10px;font-size:14px}
+.driver-row{padding:12px 0;border-top:1px solid var(--cream)}
+.driver-link{font-size:12px;color:var(--muted);overflow-wrap:anywhere;margin:2px 0 8px}
+@media print{
+  header.appbar,.tabs,.no-print,#versionStamp,.toast{display:none !important}
+  body{background:#fff;font-size:12px}
+  main{padding:0;max-width:none}
+  .card{box-shadow:none;border:1px solid #999;border-radius:6px;break-inside:avoid;padding:8px 10px;margin-bottom:6px}
+  .run-stop.done{opacity:1}
+  .run-stop.next{outline:none}
+  .run-num{width:26px;height:26px;background:#fff;color:#000;border:1.5px solid #000;font-size:12px}
+  .run-check{display:block;width:24px;height:24px;border:1.5px solid #000;flex:none}
+  .run-name{font-size:14px}
+  .run-items{border-top:none;margin-top:3px}
+  .run-item{border-bottom:none;padding:1px 0;font-size:12px}
+}
 .spinner{width:22px;height:22px;border:3px solid var(--blush);border-top-color:var(--maroon);border-radius:50%;animation:spin .7s linear infinite;margin:30px auto}
 @keyframes spin{to{transform:rotate(360deg)}}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--brown);color:#fff;padding:12px 22px;border-radius:30px;font-size:13px;font-weight:600;box-shadow:var(--shadow-lift);z-index:200;opacity:0;transition:opacity .25s ease}
@@ -283,7 +335,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.66"; // pre-launch build; 1.0 = first real launch — standing / one-off back to two independent columns, only the tops level (no gaps between standing cards). 0.65: standing cards back to their own size, still starting level with the one-off beside them. 0.64: Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.67"; // pre-launch build; 1.0 = first real launch — Run sheet tab: each delivery day's stops in route order, what to load, tap to navigate/call/tick off, printable; private no-login link per driver that always opens the next run, no prices. 0.66: standing / one-off back to two independent columns, only the tops level (no gaps between standing cards). 0.65: standing cards back to their own size, still starting level with the one-off beside them. 0.64: Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -461,7 +513,12 @@ async function resolveIdentity(user){
   hadGenuineRequest = false;
 }
 
+// A driver's run-sheet link (?run=<token>) needs no login and never shows the
+// login screen - see bootDriver().
+const driverToken = new URLSearchParams(location.search).get("run");
+
 db.auth.onAuthStateChange(async (event, session)=>{
+  if(driverToken) return;
   if(session?.user){
     currentUser=session.user;
     await resolveIdentity(session.user);
@@ -1684,7 +1741,7 @@ let allOrders=[], allStandingOrders=[], chefRequests=[], allChefPrefs=[], market
 let staffTab="orders";
 
 async function loadStaffOnlyData(){
-  const [c, o, r, sp, mr, fc, so] = await Promise.all([
+  const [c, o, r, sp, mr, fc, so, dr] = await Promise.all([
     db.from("mn_chefs").select("*").order("business_name"),
     db.from("mn_orders").select("*, mn_order_items(*), mn_chefs(business_name)").order("created_at",{ascending:false}),
     db.from("mn_chef_requests").select("*").eq("status","pending").order("created_at",{ascending:true}),
@@ -1692,6 +1749,7 @@ async function loadStaffOnlyData(){
     db.from("mn_market_runs").select("*").order("run_date",{ascending:false}),
     db.from("mn_costs").select("species,retail_price_kg"), // Batch Tracker's table — read-only here, just for the retail price used in market variance
     db.from("mn_standing_orders").select("*, mn_standing_order_items(*)").order("name"),
+    db.from("mn_drivers").select("*").order("created_at"),
     loadCapWeeks(),
   ]);
   chefs = c.data||[];
@@ -1701,6 +1759,8 @@ async function loadStaffOnlyData(){
   marketRuns = mr.data||[];
   farmCosts = fc.data||[];
   allStandingOrders = so.data||[];
+  drivers = dr.data||[];
+  runReady = !dr.error; // mn_drivers doesn't exist until the 2026-11-03 migration has been run
 }
 /* Same shape as prefFor, but for a specific chef rather than whoever's
    logged in — used only by staff when computing a pack-time Farmers
@@ -1714,6 +1774,7 @@ function renderStaffApp(){
   $("mainContent").innerHTML = `
     <div class="tabs">
       <button class="tab ${staffTab==='orders'||staffTab==='standing'?'active':''}" onclick="setStaffTab('orders')">Orders ${pendingCount()?`(${pendingCount()})`:''}</button>
+      <button class="tab ${staffTab==='run'?'active':''}" onclick="setStaffTab('run')">Run sheet</button>
       <button class="tab ${staffTab==='summary'?'active':''}" onclick="setStaffTab('summary')">Details</button>
       <button class="tab ${staffTab==='market'?'active':''}" onclick="setStaffTab('market')">Market</button>
       <button class="tab ${staffTab==='chefs'?'active':''}" onclick="setStaffTab('chefs')">Chefs ${chefRequests.length?`(${chefRequests.length})`:''}</button>
@@ -1731,6 +1792,7 @@ function renderStaffTab(){
   const el=$("staffTabContent");
   if(staffTab==="summary") el.innerHTML = renderSummaryView();
   else if(staffTab==="orders" || staffTab==="standing"){ el.innerHTML = renderOrdersView(); renderDraftLines(); }
+  else if(staffTab==="run") el.innerHTML = renderRunView();
   else if(staffTab==="market") el.innerHTML = renderMarketView();
   else if(staffTab==="chefs") el.innerHTML = renderChefsView();
   else if(staffTab==="prices") el.innerHTML = renderPricesView();
@@ -1852,6 +1914,295 @@ function forecastAgeNote(cap){
   const stale = mins > 60;
   const when = mins < 2 ? 'just now' : mins < 90 ? `${mins} min ago` : new Date(cap.updatedAt).toLocaleString('en-AU',{weekday:'short',hour:'numeric',minute:'2-digit'});
   return `<span style="color:${stale?'var(--warn)':'var(--muted)'}">MAVIS forecast, updated ${when}${stale?' — MAVIS may be offline':''}</span>`;
+}
+
+/* ================= RUN SHEET (2026-11-03) =================
+   Adam's ask: a run sheet for the delivery route that's already loaded when
+   a driver starts. Nothing to generate or send - it's built live from each
+   day's orders (standing orders place themselves, so those just appear) and
+   put in route order. Wed and Thu are separate runs automatically, because
+   orders carry their own delivery date.
+
+   Staff see it on the Run sheet tab. A driver gets a private link (?run=
+   <token>, one per driver, no login) that always opens the next run. Links
+   go through mn_run_sheet / mn_run_set_delivered and never see prices.
+
+   Several orders for one customer on one day become one stop. */
+let drivers=[], runReady=true, runDate=null, routeEditing=false;
+let driverRun=null, driverDate=null, driverOffline=null, driverDead=false, driverRunAt=null;
+
+function groupRunStops(orders){
+  const byChef=new Map();
+  for(const o of orders){
+    if(!byChef.has(o.chef_id)) byChef.set(o.chef_id,{
+      chef_id:o.chef_id, business_name:o.business_name, contact_name:o.contact_name, phone:o.phone,
+      address:o.address, delivery_notes:o.delivery_notes, route_order:o.route_order,
+      order_ids:[], items:[], notes:[], delivered:true, unconfirmed:false, delivered_at:null, delivered_by:null });
+    const st=byChef.get(o.chef_id);
+    st.order_ids.push(o.id);
+    if(o.notes) st.notes.push(o.notes);
+    if(o.status!=='fulfilled') st.delivered=false;
+    if(o.status==='pending') st.unconfirmed=true;
+    if(o.delivered_at){ st.delivered_at=o.delivered_at; st.delivered_by=o.delivered_by; }
+    for(const i of o.items||[]){
+      const same=st.items.find(x=>normalizeSpecies(x.species)===normalizeSpecies(i.species));
+      if(same) same.qty_kg=Number(same.qty_kg)+Number(i.qty_kg);
+      else st.items.push({species:i.species, qty_kg:Number(i.qty_kg)});
+      if(i.note) st.notes.push(`${i.species}: ${i.note}`);
+    }
+  }
+  return [...byChef.values()].sort((a,b)=>
+    (a.route_order??1e6)-(b.route_order??1e6) || String(a.business_name).localeCompare(String(b.business_name)));
+}
+function runMapsLink(st){
+  const dest = st.address || `${st.business_name}, Victoria, Australia`;
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}`;
+}
+function runTelLink(phone){ return 'tel:'+String(phone).replace(/[^\d+]/g,''); }
+function runTime(iso){ return new Date(iso).toLocaleTimeString('en-AU',{hour:'numeric',minute:'2-digit'}); }
+
+function renderRunStop(st, n, isNext, canTick){
+  const contact=[st.contact_name?esc(st.contact_name):'', st.phone?`<a href="${runTelLink(st.phone)}">${esc(st.phone)}</a>`:''].filter(Boolean).join(' · ');
+  const ids=st.order_ids.join(',');
+  return `<div class="card run-stop ${st.delivered?'done':''} ${isNext?'next':''}">
+    <div class="run-num">${st.delivered?'✓':n}</div>
+    <div class="run-body">
+      <div class="run-name">${esc(st.business_name)}${st.unconfirmed?' <span class="pill warn">Not confirmed yet</span>':''}</div>
+      <div class="run-addr">${st.address?esc(st.address):'<span style="color:var(--warn)">No address saved</span>'}</div>
+      ${st.delivery_notes?`<div class="run-instr">${esc(st.delivery_notes)}</div>`:''}
+      ${contact?`<div class="run-contact">${contact}</div>`:''}
+      <div class="run-items">${st.items.map(i=>`<div class="run-item"><span>${esc(i.species)}</span><span class="mono">${fmtKg(i.qty_kg)}kg</span></div>`).join('')}</div>
+      ${st.notes.map(x=>`<div class="run-note">Note: ${esc(x)}</div>`).join('')}
+      ${st.delivered
+        ? `<div class="run-done">Delivered${st.delivered_at?` ${runTime(st.delivered_at)}`:''}${st.delivered_by?` · ${esc(st.delivered_by)}`:''}${canTick?`<button class="run-undo no-print" onclick="runTick('${ids}',false)">Undo</button>`:''}</div>`
+        : `<div class="run-actions no-print">
+            <a class="btn btn-ghost" href="${runMapsLink(st)}" target="_blank" rel="noopener">Navigate</a>
+            ${st.phone?`<a class="btn btn-ghost" href="${runTelLink(st.phone)}">Call</a>`:''}
+            ${canTick?`<button class="btn btn-primary" onclick="runTick('${ids}',true)">Delivered</button>`:''}
+          </div>`}
+    </div>
+    <div class="run-check"></div>
+  </div>`;
+}
+/* The shared body: what to load, then the stops. `tools` is staff-only. */
+function renderRunBody(date, today, stops, tools){
+  const load={};
+  for(const st of stops) for(const i of st.items) load[i.species]=(load[i.species]||0)+Number(i.qty_kg);
+  const total=Object.values(load).reduce((a,b)=>a+b,0);
+  const done=stops.filter(x=>x.delivered).length;
+  const canTick=date<=today;
+  const nextIdx=canTick?stops.findIndex(x=>!x.delivered):-1;
+  return `<div class="run-head">
+      <div>
+        <h2>${fmtDayDate(date,{weekday:'long',day:'numeric',month:'long'})}</h2>
+        <div class="run-sub">${stops.length} stop${stops.length===1?'':'s'} · ${fmtKg(total)}kg${done?` · ${done} of ${stops.length} delivered`:''}</div>
+      </div>
+      ${tools||''}
+    </div>
+    ${!canTick?`<div class="run-sub no-print" style="margin-bottom:12px">Coming up. Stops can be ticked off on the day.</div>`:''}
+    <div class="card run-load">
+      <div class="section-title" style="margin-bottom:6px">Load</div>
+      ${Object.entries(load).sort((a,b)=>b[1]-a[1]).map(([sp,kg])=>`<div class="run-load-row"><span>${esc(sp)}</span><span class="mono">${fmtKg(kg)}kg</span></div>`).join('')}
+    </div>
+    ${stops.map((st,i)=>renderRunStop(st,i+1,i===nextIdx,canTick)).join('')}`;
+}
+
+/* ----- staff tab ----- */
+function staffRunDays(){
+  const today=todayISO(), end=addDaysISO(today,14), seen={};
+  for(const o of allOrders){
+    if(o.status==='cancelled' || o.requested_date<today || o.requested_date>end) continue;
+    (seen[o.requested_date]=seen[o.requested_date]||new Set()).add(o.chef_id);
+  }
+  return Object.keys(seen).sort().map(date=>({date, stops:seen[date].size}));
+}
+function staffRunOrders(date){
+  return allOrders.filter(o=>o.requested_date===date && o.status!=='cancelled').map(o=>{
+    const c=chefs.find(x=>x.id===o.chef_id)||{};
+    return {...o, business_name:c.business_name||o.mn_chefs?.business_name||'Unknown', contact_name:c.contact_name, phone:c.phone,
+      address:c.address, delivery_notes:c.delivery_notes, route_order:c.route_order, items:o.mn_order_items||[]};
+  });
+}
+function renderRunDays(days, selected, handler){
+  if(days.length<2) return '';
+  return `<div class="run-days no-print">${days.map(d=>`<button class="run-day ${d.date===selected?'active':''}" onclick="${handler}('${d.date}')">${fmtDayDate(d.date)} · ${d.stops}</button>`).join('')}</div>`;
+}
+function renderRunView(){
+  if(!runReady) return `<div class="card" style="border:1.5px solid var(--warn)"><b>One setup step left.</b> Run <span class="mono">supabase/migrations/2026-11-03_run_sheet.sql</span> in the Supabase SQL editor, then reload this page.</div>`;
+  const days=staffRunDays();
+  if(!days.some(d=>d.date===runDate)) runDate=days[0]?.date||null;
+  const tools=`<div class="run-tools no-print">
+      <button class="btn btn-ghost btn-sm" onclick="window.print()">Print</button>
+      <button class="btn btn-ghost btn-sm" onclick="routeEditing=!routeEditing;renderStaffTab()">${routeEditing?'Done':'Edit route'}</button>
+    </div>`;
+  let body;
+  if(runDate){
+    const stops=groupRunStops(staffRunOrders(runDate));
+    const noAddr=stops.filter(x=>!x.address).length;
+    body=renderRunDays(days,runDate,'setRunDate')
+      +(routeEditing?renderRouteEditor():'')
+      +(!routeEditing&&noAddr?`<div class="card no-print" style="margin-bottom:14px;border:1.5px solid var(--warn);font-size:13px">${noAddr} stop${noAddr===1?' has':'s have'} no address. Navigate will search by business name until you add one under Edit route.</div>`:'')
+      +renderRunBody(runDate,todayISO(),stops,tools);
+  } else {
+    body=`<div class="run-head"><div class="run-sub">Nothing to deliver in the next two weeks.</div>${tools}</div>`+(routeEditing?renderRouteEditor():'');
+  }
+  return body+renderDriversCard();
+}
+function setRunDate(d){ runDate=d; renderStaffTab(); }
+function routeChefs(){
+  return chefs.filter(c=>c.active).sort((a,b)=>
+    (a.route_order??1e6)-(b.route_order??1e6) || String(a.business_name).localeCompare(String(b.business_name)));
+}
+function renderRouteEditor(){
+  const list=routeChefs();
+  return `<div class="card no-print" style="margin-bottom:14px">
+    <div class="section-title" style="margin-bottom:4px">Route order</div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:6px">Stops always come out in this order, on every run. Customers with no order that day are left out.</p>
+    ${list.map((c,i)=>`<div class="route-row">
+      <div class="route-move">
+        <button aria-label="Move ${escAttr(c.business_name)} up" ${i===0?'disabled':''} onclick="moveRouteStop('${c.id}',-1)">↑</button>
+        <span class="route-pos">${i+1}</span>
+        <button aria-label="Move ${escAttr(c.business_name)} down" ${i===list.length-1?'disabled':''} onclick="moveRouteStop('${c.id}',1)">↓</button>
+      </div>
+      <div class="route-fields">
+        <div style="font-weight:700">${esc(c.business_name)}${c.delivery_zone==='remote_courier'?' <span class="pill muted">Wed</span>':''}</div>
+        <input aria-label="Address for ${escAttr(c.business_name)}" placeholder="Address" value="${escAttr(c.address)}" onchange="saveRouteField('${c.id}','address',this.value)">
+        <input aria-label="Delivery instructions for ${escAttr(c.business_name)}" placeholder="Delivery instructions (back door, key code…)" value="${escAttr(c.delivery_notes)}" onchange="saveRouteField('${c.id}','delivery_notes',this.value)">
+      </div>
+    </div>`).join('')}
+  </div>`;
+}
+async function moveRouteStop(id,dir){
+  const list=routeChefs(), i=list.findIndex(c=>c.id===id), j=i+dir;
+  if(i<0||j<0||j>=list.length) return;
+  [list[i],list[j]]=[list[j],list[i]];
+  const changed=[];
+  list.forEach((c,n)=>{ if(c.route_order!==n+1){ c.route_order=n+1; changed.push(c); } });
+  renderStaffTab();
+  const res=await Promise.all(changed.map(c=>db.from("mn_chefs").update({route_order:c.route_order}).eq("id",c.id)));
+  const bad=res.find(r=>r.error);
+  if(bad){ toast("Couldn't save the route: "+bad.error.message); await loadStaffOnlyData(); renderStaffTab(); }
+}
+async function saveRouteField(id,field,value){
+  const clean=value.trim()||null;
+  const {error}=await db.from("mn_chefs").update({[field]:clean}).eq("id",id);
+  if(error){ toast("Couldn't save: "+error.message); return; }
+  const c=chefs.find(x=>x.id===id); if(c) c[field]=clean;
+  toast("Saved");
+}
+function driverLink(d){ return `${location.origin}${location.pathname}?run=${d.token}`; }
+function renderDriversCard(){
+  return `<div class="card no-print" style="margin-top:22px">
+    <div class="section-title" style="margin-bottom:4px">Drivers</div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:10px">Each driver gets a private link with no login. It always opens the next run, with no prices. Anyone holding the link can see the stops and tick them off, so remove a driver when they finish up and their link stops working straight away.</p>
+    ${drivers.map(d=>`<div class="driver-row">
+      <div style="font-weight:700">${esc(d.name)}</div>
+      <div class="driver-link mono">${esc(driverLink(d))}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="copyDriverLink('${d.id}')">Copy link</button>
+        <a class="btn btn-ghost btn-sm" href="${esc(driverLink(d))}" target="_blank" rel="noopener" style="text-decoration:none">Open</a>
+        <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="removeDriver('${d.id}')">Remove</button>
+      </div>
+    </div>`).join('')}
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <input id="new_driver_name" aria-label="Driver's name" placeholder="Driver's name" style="flex:1;min-width:0">
+      <button class="btn btn-primary" style="width:auto;margin:0" onclick="addDriver()">Add driver</button>
+    </div>
+  </div>`;
+}
+async function addDriver(){
+  const name=$("new_driver_name").value.trim();
+  if(!name){ toast("Enter the driver's name"); return; }
+  const {error}=await db.from("mn_drivers").insert({name});
+  if(error){ toast("Couldn't add driver: "+error.message); return; }
+  await loadStaffOnlyData(); renderStaffTab();
+  toast(`${name} added. Copy their link and send it to them.`);
+}
+function copyDriverLink(id){
+  const d=drivers.find(x=>x.id===id); if(!d) return;
+  navigator.clipboard?.writeText(driverLink(d)).then(()=>toast("Link copied")).catch(()=>toast("Couldn't copy. Select the link and copy it by hand."));
+}
+async function removeDriver(id){
+  const d=drivers.find(x=>x.id===id); if(!d) return;
+  if(!confirm(`Remove ${d.name}? Their link stops working straight away.`)) return;
+  const {error}=await db.from("mn_drivers").delete().eq("id",id);
+  if(error){ toast("Couldn't remove: "+error.message); return; }
+  await loadStaffOnlyData(); renderStaffTab();
+}
+
+/* ----- ticking a stop off (staff tab and driver link) ----- */
+async function runTick(idList, delivered){
+  const ids=idList.split(',');
+  if(driverToken){
+    const {error}=await db.rpc('mn_run_set_delivered',{p_token:driverToken, p_order_ids:ids, p_delivered:delivered});
+    if(error){ toast("No reception, so that didn't save. Tap again when you've got signal."); return; }
+    await loadDriverRun();
+    return;
+  }
+  const {error}=await db.from("mn_orders").update(delivered
+    ? {status:'fulfilled', delivered_at:new Date().toISOString(), delivered_by:'Staff', updated_at:new Date().toISOString()}
+    : {status:'confirmed', delivered_at:null, delivered_by:null, updated_at:new Date().toISOString()}).in("id",ids);
+  if(error){ toast("Couldn't save: "+error.message); return; }
+  await loadStaffOnlyData(); renderStaffApp();
+}
+
+/* ----- the driver's link -----
+   Reception drops out on parts of the route, so the last sheet loaded is kept
+   on the phone and shown if a reload fails. */
+function driverCacheKey(){ return 'mn_run_sheet_'+driverToken; }
+function renderDriverApp(){
+  const el=$("mainContent");
+  if(driverDead){
+    el.innerHTML=`<div class="card empty-state"><b>This link isn't active.</b><br>Check with Adam or Em for a new one.</div>`;
+    return;
+  }
+  if(!driverRun){
+    el.innerHTML=`<div class="card empty-state"><b>Couldn't load the run sheet.</b><br>Check your reception and try again.<br><button class="btn btn-primary" style="width:auto" onclick="loadDriverRun()">Try again</button></div>`;
+    return;
+  }
+  const offline=driverOffline?`<div class="card" style="margin-bottom:14px;border:1.5px solid var(--warn);font-size:13px">No reception. This is the sheet from ${runTime(driverOffline)}, so any changes since then won't show.</div>`:'';
+  if(!driverRun.date){
+    el.innerHTML=offline+`<div class="card empty-state"><b>No deliveries coming up.</b><br>New runs show up here automatically.</div>`;
+    return;
+  }
+  el.innerHTML=offline+renderRunDays(driverRun.dates,driverRun.date,'setDriverDate')
+    +renderRunBody(driverRun.date,driverRun.today,groupRunStops(driverRun.orders));
+}
+async function loadDriverRun(){
+  const {data,error}=await db.rpc('mn_run_sheet',{p_token:driverToken, p_date:driverDate});
+  if(error){
+    if(!driverRun){
+      try{ const c=JSON.parse(localStorage.getItem(driverCacheKey())); if(c){ driverRun=c.data; driverOffline=c.at; } }catch(e){}
+    } else if(!driverOffline){ driverOffline=driverRunAt; }
+    renderDriverApp();
+    return;
+  }
+  driverOffline=null;
+  if(data===null){
+    driverDead=true; driverRun=null;
+    try{ localStorage.removeItem(driverCacheKey()); }catch(e){}
+    renderDriverApp();
+    return;
+  }
+  driverDead=false; driverRun=data; driverRunAt=new Date().toISOString();
+  try{ localStorage.setItem(driverCacheKey(), JSON.stringify({data, at:driverRunAt})); }catch(e){}
+  renderDriverApp();
+}
+async function setDriverDate(d){ driverDate=d; await loadDriverRun(); window.scrollTo(0,0); }
+async function bootDriver(){
+  document.title="Run sheet · Markwood";
+  showApp();
+  $("appSubtitle").textContent="Run sheet";
+  $("rolePill").textContent="Driver";
+  document.querySelector(".appbar-actions button")?.classList.add("hidden"); // no sign out: there's no login
+  // A link cut off in a text message can't be valid, so don't blame reception.
+  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(driverToken)){ driverDead=true; renderDriverApp(); return; }
+  $("mainContent").innerHTML=`<div class="spinner"></div>`;
+  await loadDriverRun();
+  // Stays right if it's left open: changes to the run come through, and
+  // tomorrow it rolls onto the next day's run.
+  setInterval(()=>{ if(!document.hidden) loadDriverRun(); }, 5*60*1000);
+  document.addEventListener("visibilitychange",()=>{ if(!document.hidden) loadDriverRun(); });
 }
 
 /* ----- STAFF: THIS WEEK / NEXT WEEK ----- */
@@ -2860,6 +3211,7 @@ document.addEventListener("DOMContentLoaded", () => {
   v.id = "versionStamp";
   v.textContent = `v${APP_VERSION}`;
   document.body.appendChild(v);
+  if(driverToken) bootDriver();
 });
 </script>
 </body>
