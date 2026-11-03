@@ -96,6 +96,9 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .pill.muted{background:var(--blush);color:var(--brown)}
 .orders-readout{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap;margin-bottom:18px}
 .orders-readout .num{font-size:34px;font-weight:800;line-height:1.1}
+/* solid fill so the week's $ reads at a glance; 18px bold keeps white on amber legible */
+.week-value{display:inline-block;margin-top:8px;padding:6px 14px;border-radius:20px;font-size:18px;font-weight:800;color:#fff;box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.week-value.good{background:var(--good)} .week-value.warn{background:var(--warn)} .week-value.danger{background:var(--danger)}
 .orders-readout .lbl{font-size:12px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
 /* Two independent columns, standing | one-off (2026-10-31). Only the tops
    line up: both headings are the same height (the left one carries the
@@ -366,7 +369,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.77"; // pre-launch build; 1.0 = first real launch — Week's ≈ $ value is a traffic-light pill: red under $2k, amber $2-3k, green $3k+.
+const APP_VERSION = "0.78"; // pre-launch build; 1.0 = first real launch — Week's $ pill is bigger and solid-coloured so it stands out.
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -3177,7 +3180,7 @@ function weekOrderValue(ws){
 const WEEK_VALUE_AMBER = 2000, WEEK_VALUE_GREEN = 3000;
 function weekValuePill(v){
   const tone = v>=WEEK_VALUE_GREEN ? 'good' : v>=WEEK_VALUE_AMBER ? 'warn' : 'danger';
-  return `<span class="pill ${tone} mono" style="margin-top:6px" title="Red under $2k, amber $2-3k, green $3k+">≈ $${Math.round(v).toLocaleString('en-AU')}</span>`;
+  return `<span class="week-value ${tone} mono" title="Red under $2k, amber $2-3k, green $3k+">≈ $${Math.round(v).toLocaleString('en-AU')}</span>`;
 }
 function renderOrdersReadout(){
   const next = upcomingDeliveryDates(1)[0];
