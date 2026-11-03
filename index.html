@@ -122,7 +122,6 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .run-load-row:first-of-type{border-top:none}
 .run-stop{display:flex;gap:14px;margin-bottom:12px;padding:16px}
 .run-stop.next{outline:2.5px solid var(--maroon)}
-.run-stop.done{opacity:.62}
 .run-num{width:36px;height:36px;border-radius:50%;background:var(--brown);color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center;flex:none;font-family:"Montserrat",sans-serif}
 .run-stop.done .run-num{background:var(--good)}
 .run-body{flex:1;min-width:0}
@@ -133,10 +132,15 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .run-items{margin-top:8px;border-top:1px solid var(--cream)}
 .run-item{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--cream);font-size:14px;font-weight:600}
 .run-note{font-size:13px;color:var(--warn);margin-top:6px}
-.run-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-.run-actions .btn{width:auto;flex:1 1 120px;min-height:44px;margin:0;text-decoration:none}
-.run-done{font-size:13px;font-weight:700;color:var(--good);margin-top:10px}
-.run-undo{font-size:12px;font-weight:600;color:var(--muted);text-decoration:underline;margin-left:8px;padding:8px 2px}
+.run-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.run-small{padding:6px 14px;min-height:36px;font-size:13px;margin:0;text-decoration:none}
+.run-drop{flex:1 1 100%;min-height:60px;padding:14px 24px;border-radius:999px;background:var(--maroon);color:#fff;font-family:"Montserrat",sans-serif;font-size:20px;font-weight:800;letter-spacing:.3px;box-shadow:var(--shadow);transition:transform .08s ease}
+.run-drop:active{transform:scale(.98)}
+.run-done-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
+.run-done{flex:1 1 auto;min-height:48px;display:flex;align-items:center;justify-content:center;text-align:center;padding:8px 20px;border-radius:999px;background:var(--good);color:#fff;font-family:"Montserrat",sans-serif;font-size:16px;font-weight:800}
+.run-undo{font-size:13px;font-weight:600;color:var(--muted);text-decoration:underline;padding:8px 4px;flex:none}
+.run-stop.done .run-body>*:not(.run-done-row){opacity:.55}
+@media (min-width:761px){ .run-drop{flex:0 1 340px;margin-left:auto} }
 .run-check{display:none}
 .run-stop .drag-handle{margin:-4px -6px 0 0}
 .drag-handle{display:flex;align-items:center;justify-content:center;width:36px;height:44px;flex:none;color:var(--muted);cursor:grab;touch-action:none;border-radius:var(--radius-sm)}
@@ -163,7 +167,8 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
   body{background:#fff;font-size:12px}
   main{padding:0;max-width:none}
   .card{box-shadow:none;border:1px solid #999;border-radius:6px;break-inside:avoid;padding:8px 10px;margin-bottom:6px}
-  .run-stop.done{opacity:1}
+  .run-stop.done .run-body>*{opacity:1 !important}
+  .run-done{background:none;color:#000;border:1.5px solid #000;min-height:0;padding:2px 10px;font-size:12px;display:inline-flex;flex:none}
   .run-stop.next{outline:none}
   .run-num{width:26px;height:26px;background:#fff;color:#000;border:1.5px solid #000;font-size:12px}
   .run-check{display:block;width:24px;height:24px;border:1.5px solid #000;flex:none}
@@ -347,7 +352,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.69"; // pre-launch build; 1.0 = first real launch — Farmers Selection only draws on stock not already sold: a species fully taken by other orders (e.g. 5kg of Black Pearl out of 5.4kg) drops out of the box. Same numbers as the wholesale cap. 0.68: Run sheet: drag tiles to change the route, and legs (Main Run / Bright Run), each with its own stops and load list. 0.67: Run sheet tab: each delivery day's stops in route order, what to load, tap to navigate/call/tick off, printable; private no-login link per driver that always opens the next run, no prices. 0.66: standing / one-off back to two independent columns, only the tops level (no gaps between standing cards). 0.65: standing cards back to their own size, still starting level with the one-off beside them. 0.64: Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.70"; // pre-launch build; 1.0 = first real launch — Farmers Selection never suggests more than is free, and warns if it can't fill the box. Address can be edited on the Chefs tab, and customers with no login can be saved with no email. Mixed Oyster split only uses oysters not already sold to direct orders, and says so if there isn't enough. Run sheet: large Dropped pill replaces the Delivered button and stays on the tile with the time, smaller Navigate and Call. 0.69: Farmers Selection only draws on stock not already sold: a species fully taken by other orders (e.g. 5kg of Black Pearl out of 5.4kg) drops out of the box. Same numbers as the wholesale cap. 0.68: Run sheet: drag tiles to change the route, and legs (Main Run / Bright Run), each with its own stops and load list. 0.67: Run sheet tab: each delivery day's stops in route order, what to load, tap to navigate/call/tick off, printable; private no-login link per driver that always opens the next run, no prices. 0.66: standing / one-off back to two independent columns, only the tops level (no gaps between standing cards). 0.65: standing cards back to their own size, still starting level with the one-off beside them. 0.64: Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -800,56 +805,75 @@ function computeFarmersSelection(targetKg, prefLookup, deliveryDate){
   const totalWeight = weighted.reduce((s,w)=>s+w.weight, 0);
   let shares = weighted.map(w=>({ ...w, rawKg: (w.weight/totalWeight) * targetKg, capped:false }));
 
-  // Cap any single species at CAP_FRACTION of the box; redistribute the
-  // excess proportionally across the rest so the box still totals target.
-  // Once an item is capped it's locked at that value and excluded from
-  // ever receiving redistributed excess back — otherwise a two-item box
-  // can ping-pong the same excess back onto the item we just capped.
+  // Hold each species to the smaller of CAP_FRACTION of the box and what's
+  // actually free; redistribute the excess proportionally across the rest so
+  // the box still totals target. Once an item is capped it's locked at that
+  // value and excluded from ever receiving redistributed excess back —
+  // otherwise a two-item box can ping-pong the same excess back onto the
+  // item we just capped.
   const cap = targetKg * CAP_FRACTION;
+  const limit = s => Math.min(cap, s.available);
   for(let iterations=0; iterations<10; iterations++){
-    const newlyOver = shares.filter(s=>!s.capped && s.rawKg > cap);
+    const newlyOver = shares.filter(s=>!s.capped && s.rawKg > limit(s));
     if(!newlyOver.length) break;
     let excess = 0;
-    for(const s of newlyOver){ excess += s.rawKg - cap; s.rawKg = cap; s.capped = true; }
+    for(const s of newlyOver){ excess += s.rawKg - limit(s); s.rawKg = limit(s); s.capped = true; }
     const redistributable = shares.filter(s=>!s.capped);
     const redistributableTotal = redistributable.reduce((sum,s)=>sum+s.rawKg, 0);
     if(redistributableTotal <= 0) break; // everything capped — nowhere left to put the excess
     for(const s of redistributable){ s.rawKg += excess * (s.rawKg/redistributableTotal); }
   }
 
+  // Still short: variety gives way before the box does, so the 60% rule is
+  // relaxed and the rest comes from whatever's free. Free stock is the one
+  // hard limit. If there isn't enough, the box comes up short and the pack
+  // hint says so, rather than suggesting stock that's spoken for.
+  const stillShort = targetKg - shares.reduce((t,s)=>t+s.rawKg,0);
+  const room = shares.reduce((t,s)=>t+Math.max(0,s.available-s.rawKg),0);
+  if(stillShort>0.05 && room>0){
+    const take = Math.min(stillShort, room);
+    for(const s of shares) s.rawKg += take*Math.max(0,s.available-s.rawKg)/room;
+  }
+
   // Drop anything that rounds to nothing, then round to friendly 0.1kg
-  // portions, fixing any rounding drift onto the largest item.
+  // portions, fixing any rounding drift onto the largest item with room for it.
   let items = shares.filter(s=>s.rawKg >= 0.1).map(s=>({ species:s.species, qty_kg: Math.round(s.rawKg*10)/10, available:s.available, pref:s.pref }));
   if(!items.length) return [];
   const roundedTotal = items.reduce((s,i)=>s+i.qty_kg, 0);
-  const drift = Math.round((targetKg - roundedTotal)*10)/10;
+  const coverable = Math.min(targetKg, items.reduce((t,i)=>t+i.available,0));
+  const drift = Math.round((coverable - roundedTotal)*10)/10;
   if(Math.abs(drift) >= 0.1){
     items.sort((a,b)=>b.qty_kg-a.qty_kg);
-    items[0].qty_kg = Math.max(0.1, Math.round((items[0].qty_kg+drift)*10)/10);
+    const home = items.find(i=>i.available-i.qty_kg>=drift) || items[0];
+    home.qty_kg = Math.max(0.1, Math.round((home.qty_kg+drift)*10)/10);
   }
   items.sort((a,b)=>b.qty_kg-a.qty_kg);
   return items;
 }
 
-/* What a Farmers Selection box for this delivery date can be packed from.
-   Uses the wholesale cap's own sums, so the box and the cap always agree:
-   MAVIS's forecast for that week, less the market reserve, less every order
-   for that week. A species with nothing left drops out, and one with only a
-   little left gets only a small share. Farmers Selection orders themselves
-   are left out of the sum, otherwise each box would count against itself.
+/* What's free to pack a bundle from for this delivery date, using the wholesale
+   cap's own sums so the box and the cap always agree: MAVIS's forecast for that
+   week, less the market reserve, less that week's orders. A species with
+   nothing left drops out, and one with a little left gets a small share.
+   `ignore` is the bundles to leave out of the sum, otherwise each box would
+   count against itself:
+   - Farmers Selection ignores itself but still gives way to Mixed Oyster.
+   - Mixed Oyster ignores both, because the cap fills it first.
    MAVIS only forecasts this week and next. Beyond that (or if MAVIS was
    offline when the week rolled over) this falls back to the availability
    board, still less any species ordered directly that week. */
-function farmersSelectionStock(deliveryDate){
+function stockAfterOrders(deliveryDate, ignore){
   const data = deliveryDate ? weekAvail[weekStartISO(deliveryDate)] : null;
-  const isFs = c => normalizeSpecies(c.item)===normalizeSpecies("Farmers Selection");
-  const cap = data ? computeCap({...data, committed:(data.committed||[]).filter(c=>!isFs(c))}) : null;
+  const ignored = c => ignore.some(x=>normalizeSpecies(x)===normalizeSpecies(c.item));
+  const cap = data ? computeCap({...data, committed:(data.committed||[]).filter(c=>!ignored(c))}) : null;
   if(cap) return cap.rows.filter(r=>r.left>0).map(r=>({species:r.species, displayConservative:r.left}));
   const ordered = species => (data?.committed||[]).filter(c=>normalizeSpecies(c.item)===normalizeSpecies(species)).reduce((t,c)=>t+(Number(c.kg)||0),0);
   return computeAvailabilityBoard()
     .map(e => ({...e, displayConservative:e.displayConservative-ordered(e.species)}))
     .filter(e => e.displayConservative > 0);
 }
+function farmersSelectionStock(deliveryDate){ return stockAfterOrders(deliveryDate, ["Farmers Selection"]); }
+function mixedOysterStock(deliveryDate){ return stockAfterOrders(deliveryDate, ["Farmers Selection","Mixed Oyster"]); }
 
 /* ----- Mixed Oyster suggested split (staff pack-time aid only) -----
    Mixed Oyster is ordered by chefs as ONE line item at a flat bundle
@@ -863,11 +887,14 @@ function farmersSelectionStock(deliveryDate){
    Same equal-split-with-cap-and-redistribute approach as before: a
    variety with nothing available is left out of the suggestion entirely,
    and a variety with less than its equal share is capped at what's
-   actually there, with the excess redistributed across the others. */
+   actually there, with the excess redistributed across the others. Only
+   oysters not already sold to direct orders count (see stockAfterOrders). If
+   they don't cover the box, the split comes up short rather than suggesting
+   stock that's spoken for, and the pack hint says so. */
 const MIXED_OYSTER_SPECIES = ["Snow White Oyster","Warm White Oyster","Blue Oyster","Chocolate Oyster"];
-function computeMixedOysterBox(targetKg){
+function computeMixedOysterBox(targetKg, deliveryDate){
   targetKg = targetKg || 3;
-  const board = computeAvailabilityBoard();
+  const board = mixedOysterStock(deliveryDate);
   const avail = MIXED_OYSTER_SPECIES.map(sp=>{
     const n = normalizeSpecies(sp);
     const e = board.find(x=>normalizeSpecies(x.species)===n);
@@ -892,7 +919,9 @@ function computeMixedOysterBox(targetKg){
   let items = shares.filter(s=>s.rawKg >= 0.1).map(s=>({ species:s.species, qty_kg: Math.round(s.rawKg*10)/10, available:s.available }));
   if(!items.length) return [];
   const roundedTotal = items.reduce((s,i)=>s+i.qty_kg, 0);
-  const drift = Math.round((targetKg - roundedTotal)*10)/10;
+  // Only rounding gets tidied up here. A real shortfall stays short.
+  const coverable = Math.min(targetKg, avail.reduce((t,x)=>t+x.available,0));
+  const drift = Math.round((coverable - roundedTotal)*10)/10;
   if(Math.abs(drift) >= 0.1){
     items.sort((a,b)=>b.qty_kg-a.qty_kg);
     items[0].qty_kg = Math.max(0.1, Math.round((items[0].qty_kg+drift)*10)/10);
@@ -900,8 +929,8 @@ function computeMixedOysterBox(targetKg){
   items.sort((a,b)=>b.qty_kg-a.qty_kg);
   return items;
 }
-function anyMixedOysterStockAvailable(){
-  const board = computeAvailabilityBoard();
+function anyMixedOysterStockAvailable(deliveryDate){
+  const board = mixedOysterStock(deliveryDate);
   return MIXED_OYSTER_SPECIES.some(sp=>{
     const n=normalizeSpecies(sp);
     const e=board.find(x=>normalizeSpecies(x.species)===n);
@@ -1080,7 +1109,7 @@ function addFarmersSelectionToCart(){
    variety with nothing available reads as an explicit "N/A" rather than
    quietly vanishing — makes it obvious why the split isn't even 4-ways. */
 function renderMixedOysterCard(){
-  if(!anyMixedOysterStockAvailable()) return "";
+  if(!anyMixedOysterStockAvailable(currentDeliveryThursday(myChefRow?.delivery_zone))) return "";
   const price = priceFor("Mixed Oyster");
   const priceLabel = price?.unit_price_per_kg ? `$${price.unit_price_per_kg.toFixed(2)}/kg` : "POA";
   const lineTotal = price?.unit_price_per_kg ? price.unit_price_per_kg*moBoxKg : null;
@@ -2036,11 +2065,14 @@ function renderRunStop(st, n, isNext, canTick, draggable){
       <div class="run-items">${st.items.map(i=>`<div class="run-item"><span>${esc(i.species)}</span><span class="mono">${fmtKg(i.qty_kg)}kg</span></div>`).join('')}</div>
       ${st.notes.map(x=>`<div class="run-note">Note: ${esc(x)}</div>`).join('')}
       ${st.delivered
-        ? `<div class="run-done">Delivered${st.delivered_at?` ${runTime(st.delivered_at)}`:''}${st.delivered_by?` · ${esc(st.delivered_by)}`:''}${canTick?`<button class="run-undo no-print" onclick="runTick('${ids}',false)">Undo</button>`:''}</div>`
+        ? `<div class="run-done-row">
+            <div class="run-done">✓ Dropped${st.delivered_at?` ${runTime(st.delivered_at)}`:''}${st.delivered_by?` · ${esc(st.delivered_by)}`:''}</div>
+            ${canTick?`<button class="run-undo no-print" onclick="runTick('${ids}',false)">Undo</button>`:''}
+          </div>`
         : `<div class="run-actions no-print">
-            <a class="btn btn-ghost" href="${runMapsLink(st)}" target="_blank" rel="noopener">Navigate</a>
-            ${st.phone?`<a class="btn btn-ghost" href="${runTelLink(st.phone)}">Call</a>`:''}
-            ${canTick?`<button class="btn btn-primary" onclick="runTick('${ids}',true)">Delivered</button>`:''}
+            <a class="btn btn-ghost run-small" href="${runMapsLink(st)}" target="_blank" rel="noopener">Navigate</a>
+            ${st.phone?`<a class="btn btn-ghost run-small" href="${runTelLink(st.phone)}">Call</a>`:''}
+            ${canTick?`<button class="run-drop" onclick="runTick('${ids}',true)">Dropped</button>`:''}
           </div>`}
     </div>
     ${draggable?`<div class="drag-handle no-print" title="Drag to change the stop order" aria-label="Drag to move ${escAttr(st.business_name)}">${DRAG_DOTS}</div>`:''}
@@ -2058,7 +2090,7 @@ function renderRunBody(date, today, stops, tools, heading, draggable){
   return `<div class="run-head">
       <div>
         <h2>${fmtDayDate(date,{weekday:'long',day:'numeric',month:'long'})}</h2>
-        <div class="run-sub">${heading||''}${stops.length} stop${stops.length===1?'':'s'} · ${fmtKg(total)}kg${done?` · ${done} of ${stops.length} delivered`:''}</div>
+        <div class="run-sub">${heading||''}${stops.length} stop${stops.length===1?'':'s'} · ${fmtKg(total)}kg${done?` · ${done} of ${stops.length} dropped`:''}</div>
       </div>
       ${tools||''}
     </div>
@@ -2780,17 +2812,21 @@ async function deleteMarketRun(id){
 }
 
 /* ----- ORDERS (staff manage all, log on chef's behalf) ----- */
-function mixedOysterHintHTML(qtyKg){
-  const split = computeMixedOysterBox(qtyKg);
-  if(!split.length) return `<div style="font-size:12px;color:var(--warn);margin-top:2px">↳ Nothing currently fruiting across the 4 oyster varieties — double check before packing</div>`;
+function mixedOysterHintHTML(qtyKg, deliveryDate){
+  const split = computeMixedOysterBox(qtyKg, deliveryDate);
+  if(!split.length) return `<div style="font-size:12px;color:var(--warn);margin-top:2px">↳ No oysters left for this after other orders — double check before packing</div>`;
   const txt = split.map(s=>`${fmtKg(s.qty_kg)}kg ${s.species}`).join(", ");
-  return `<div style="font-size:12px;color:var(--muted);margin-top:2px">↳ Suggested split right now: ${txt} <span style="opacity:.7">— updates live, decide the real mix at pack time</span></div>`;
+  const free = split.reduce((t,s)=>t+s.qty_kg,0);
+  const short = qtyKg-free>=0.1 ? `<div style="color:var(--warn)">Only ${fmtKg(free)}kg of the ${fmtKg(qtyKg)}kg is free after other orders — double check before packing</div>` : '';
+  return `<div style="font-size:12px;color:var(--muted);margin-top:2px">↳ Suggested split right now: ${txt} <span style="opacity:.7">— updates live, decide the real mix at pack time</span>${short}</div>`;
 }
 function farmersSelectionHintHTML(qtyKg, chefId, deliveryDate){
   const split = computeFarmersSelection(qtyKg, sp=>prefForChef(chefId, sp), deliveryDate);
   if(!split.length) return `<div style="font-size:12px;color:var(--warn);margin-top:2px">↳ No stock left for this after other orders — double check before packing</div>`;
   const txt = split.map(s=>`${fmtKg(s.qty_kg)}kg ${s.species}`).join(", ");
-  return `<div style="font-size:12px;color:var(--muted);margin-top:2px">↳ Suggested mix for this chef right now: ${txt} <span style="opacity:.7">— updates live, decide the real mix at pack time</span></div>`;
+  const free = split.reduce((t,s)=>t+s.qty_kg,0);
+  const short = qtyKg-free>=0.1 ? `<div style="color:var(--warn)">Only ${fmtKg(free)}kg of the ${fmtKg(qtyKg)}kg is free after other orders — double check before packing</div>` : '';
+  return `<div style="font-size:12px;color:var(--muted);margin-top:2px">↳ Suggested mix for this chef right now: ${txt} <span style="opacity:.7">— updates live, decide the real mix at pack time</span>${short}</div>`;
 }
 function renderOrdersView(){
   const logFormHtml = `<div class="card" id="staffOrderForm" style="margin-bottom:18px">${renderStaffOrderForm()}</div>`;
@@ -2827,7 +2863,7 @@ function renderOrdersView(){
                 <button onclick="staffRemoveOrderItem('${i.id}','${o.id}')" style="color:var(--danger);border:none;background:none">✕</button>
               </span>
             </div>
-            ${i.species==='Mixed Oyster'?mixedOysterHintHTML(i.qty_kg):''}
+            ${i.species==='Mixed Oyster'?mixedOysterHintHTML(i.qty_kg, o.requested_date):''}
             ${i.species==='Farmers Selection'?farmersSelectionHintHTML(i.qty_kg, o.chef_id, o.requested_date):''}
           </div>`).join("")}
           <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
@@ -2856,7 +2892,7 @@ function renderOrdersView(){
       <div style="margin-top:10px">${items.map(i=>`<div class="order-item-row" style="display:block">
         <div style="display:flex;justify-content:space-between"><span>${i.species}${i.is_special_request?' · quote requested':''}</span><span class="mono">${fmtKg(i.qty_kg)}kg${i.unit_price_per_kg?` · $${(i.unit_price_per_kg*i.qty_kg).toFixed(2)}`:''}</span></div>
         ${i.note?`<div style="font-size:12px;color:var(--warn);margin-top:2px">↳ "${i.note}"</div>`:''}
-        ${i.species==='Mixed Oyster'?mixedOysterHintHTML(i.qty_kg):''}
+        ${i.species==='Mixed Oyster'?mixedOysterHintHTML(i.qty_kg, o.requested_date):''}
         ${i.species==='Farmers Selection'?farmersSelectionHintHTML(i.qty_kg, o.chef_id, o.requested_date):''}
       </div>`).join("")}</div>
       ${o.notes?`<div style="margin-top:10px;font-size:13px;color:var(--muted)">Note: ${o.notes}</div>`:''}
@@ -3085,6 +3121,8 @@ function renderChefsView(){
         <input id="edit_chef_email" type="email" value="${escAttr(c.email)}">
         <label for="edit_chef_phone">Phone</label>
         <input id="edit_chef_phone" value="${escAttr(c.phone)}">
+        <label for="edit_chef_address">Delivery address</label>
+        <input id="edit_chef_address" value="${escAttr(c.address)}" placeholder="Street, town, postcode">
         <label for="edit_chef_zone">Delivery zone</label>
         <select id="edit_chef_zone">
           ${Object.entries(DELIVERY_ZONE_LABELS).map(([k,label])=>`<option value="${k}" ${c.delivery_zone===k?'selected':''}>${label}</option>`).join("")}
@@ -3100,6 +3138,7 @@ function renderChefsView(){
         <div>
           <div style="font-weight:700">${c.business_name}</div>
           <div style="font-size:12px;color:var(--muted)">${c.contact_name||''} ${c.email?'· '+c.email:''} ${c.phone?'· '+c.phone:''}</div>
+          <div style="font-size:12px;margin-top:2px;${c.address?'color:var(--muted)':'color:var(--warn)'}">${c.address?esc(c.address):'No delivery address'}</div>
           <div style="font-size:12px;color:var(--muted);margin-top:2px">${DELIVERY_ZONE_LABELS[c.delivery_zone]||DELIVERY_ZONE_LABELS.standard}</div>
         </div>
         <span class="pill ${c.active?'good':'muted'}">${c.active?'active':'inactive'}</span>
@@ -3210,11 +3249,16 @@ function dismissChefLoginBox(){ lastCreatedChefAccount=null; renderStaffApp(); }
 async function saveChefEdit(id){
   const business_name=$("edit_chef_business").value.trim();
   const contact_name=$("edit_chef_contact").value.trim()||null;
-  const email=$("edit_chef_email").value.trim();
+  const email=$("edit_chef_email").value.trim()||null;
   const phone=$("edit_chef_phone").value.trim()||null;
   const delivery_zone=$("edit_chef_zone").value;
-  if(!business_name||!email){ toast("Business name and email are required"); return; }
-  const {error}=await db.from("mn_chefs").update({business_name,contact_name,email,phone,delivery_zone}).eq("id",id);
+  const address=$("edit_chef_address").value.trim()||null;
+  // Customers taken by phone or text have no login and often no email, so
+  // it's only required for someone who signs in with it.
+  const hasLogin=!!chefs.find(c=>c.id===id)?.user_id;
+  if(!business_name){ toast("Business name is required"); return; }
+  if(hasLogin&&!email){ toast("Email is required: this customer signs in with it"); return; }
+  const {error}=await db.from("mn_chefs").update({business_name,contact_name,email,phone,delivery_zone,address}).eq("id",id);
   if(error){ toast("Couldn't save: "+error.message); return; }
   editingChefId=null;
   toast("Saved");
