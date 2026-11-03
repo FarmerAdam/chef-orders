@@ -347,7 +347,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.68"; // pre-launch build; 1.0 = first real launch — Run sheet: drag tiles to change the route, and legs (Main Run / Bright Run), each with its own stops and load list. 0.67: Run sheet tab: each delivery day's stops in route order, what to load, tap to navigate/call/tick off, printable; private no-login link per driver that always opens the next run, no prices. 0.66: standing / one-off back to two independent columns, only the tops level (no gaps between standing cards). 0.65: standing cards back to their own size, still starting level with the one-off beside them. 0.64: Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.69"; // pre-launch build; 1.0 = first real launch — Farmers Selection only draws on stock not already sold: a species fully taken by other orders (e.g. 5kg of Black Pearl out of 5.4kg) drops out of the box. Same numbers as the wholesale cap. 0.68: Run sheet: drag tiles to change the route, and legs (Main Run / Bright Run), each with its own stops and load list. 0.67: Run sheet tab: each delivery day's stops in route order, what to load, tap to navigate/call/tick off, printable; private no-login link per driver that always opens the next run, no prices. 0.66: standing / one-off back to two independent columns, only the tops level (no gaps between standing cards). 0.65: standing cards back to their own size, still starting level with the one-off beside them. 0.64: Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -771,11 +771,15 @@ function fmtKg(n){ return (Math.round(n*10)/10).toString(); }
    - A single species is capped at 60% of the box so a strong "more"
      preference skews the mix without ever making the box monotonous.
    - Rounds to friendly portions (nearest 0.1kg) and re-distributes any
-     rounding remainder onto the largest item so the total still hits target. */
-function computeFarmersSelection(targetKg, prefLookup){
+     rounding remainder onto the largest item so the total still hits target.
+
+   The box only draws on stock that isn't already sold (Adam, 2026-11-03: 5kg
+   of Black Pearl was ordered directly out of 5.4kg, and the box still counted
+   it). See farmersSelectionStock. */
+function computeFarmersSelection(targetKg, prefLookup, deliveryDate){
   targetKg = targetKg || 3;
   prefLookup = prefLookup || prefFor;
-  const board = computeAvailabilityBoard().filter(e => e.displayConservative > 0);
+  const board = farmersSelectionStock(deliveryDate);
   if(!board.length) return [];
 
   const PREF_MULTIPLIER = { less: 0.5, normal: 1, more: 2, none: 0.2 }; // 'none' is legacy data (option removed) — kept low rather than zero so nothing's fully excluded
@@ -825,6 +829,26 @@ function computeFarmersSelection(targetKg, prefLookup){
   }
   items.sort((a,b)=>b.qty_kg-a.qty_kg);
   return items;
+}
+
+/* What a Farmers Selection box for this delivery date can be packed from.
+   Uses the wholesale cap's own sums, so the box and the cap always agree:
+   MAVIS's forecast for that week, less the market reserve, less every order
+   for that week. A species with nothing left drops out, and one with only a
+   little left gets only a small share. Farmers Selection orders themselves
+   are left out of the sum, otherwise each box would count against itself.
+   MAVIS only forecasts this week and next. Beyond that (or if MAVIS was
+   offline when the week rolled over) this falls back to the availability
+   board, still less any species ordered directly that week. */
+function farmersSelectionStock(deliveryDate){
+  const data = deliveryDate ? weekAvail[weekStartISO(deliveryDate)] : null;
+  const isFs = c => normalizeSpecies(c.item)===normalizeSpecies("Farmers Selection");
+  const cap = data ? computeCap({...data, committed:(data.committed||[]).filter(c=>!isFs(c))}) : null;
+  if(cap) return cap.rows.filter(r=>r.left>0).map(r=>({species:r.species, displayConservative:r.left}));
+  const ordered = species => (data?.committed||[]).filter(c=>normalizeSpecies(c.item)===normalizeSpecies(species)).reduce((t,c)=>t+(Number(c.kg)||0),0);
+  return computeAvailabilityBoard()
+    .map(e => ({...e, displayConservative:e.displayConservative-ordered(e.species)}))
+    .filter(e => e.displayConservative > 0);
 }
 
 /* ----- Mixed Oyster suggested split (staff pack-time aid only) -----
@@ -1022,7 +1046,7 @@ function renderBoardView(){
 
 /* ----- Farmers Selection box card ----- */
 function renderFarmersSelectionCard(){
-  const box = computeFarmersSelection(fsBoxKg);
+  const box = computeFarmersSelection(fsBoxKg, null, currentDeliveryThursday(myChefRow?.delivery_zone));
   if(!box.length) return "";
   const price = priceFor("Farmers Selection");
   const lineTotal = effectivePrice(price)!=null ? effectivePrice(price)*fsBoxKg : null;
@@ -2762,9 +2786,9 @@ function mixedOysterHintHTML(qtyKg){
   const txt = split.map(s=>`${fmtKg(s.qty_kg)}kg ${s.species}`).join(", ");
   return `<div style="font-size:12px;color:var(--muted);margin-top:2px">↳ Suggested split right now: ${txt} <span style="opacity:.7">— updates live, decide the real mix at pack time</span></div>`;
 }
-function farmersSelectionHintHTML(qtyKg, chefId){
-  const split = computeFarmersSelection(qtyKg, sp=>prefForChef(chefId, sp));
-  if(!split.length) return `<div style="font-size:12px;color:var(--warn);margin-top:2px">↳ Nothing currently fruiting — double check before packing</div>`;
+function farmersSelectionHintHTML(qtyKg, chefId, deliveryDate){
+  const split = computeFarmersSelection(qtyKg, sp=>prefForChef(chefId, sp), deliveryDate);
+  if(!split.length) return `<div style="font-size:12px;color:var(--warn);margin-top:2px">↳ No stock left for this after other orders — double check before packing</div>`;
   const txt = split.map(s=>`${fmtKg(s.qty_kg)}kg ${s.species}`).join(", ");
   return `<div style="font-size:12px;color:var(--muted);margin-top:2px">↳ Suggested mix for this chef right now: ${txt} <span style="opacity:.7">— updates live, decide the real mix at pack time</span></div>`;
 }
@@ -2804,7 +2828,7 @@ function renderOrdersView(){
               </span>
             </div>
             ${i.species==='Mixed Oyster'?mixedOysterHintHTML(i.qty_kg):''}
-            ${i.species==='Farmers Selection'?farmersSelectionHintHTML(i.qty_kg, o.chef_id):''}
+            ${i.species==='Farmers Selection'?farmersSelectionHintHTML(i.qty_kg, o.chef_id, o.requested_date):''}
           </div>`).join("")}
           <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
             <select id="add_staff_orderitem_sp_${o.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escAttr(p.species)}">${p.species}</option>`).join("")}</select>
@@ -2833,7 +2857,7 @@ function renderOrdersView(){
         <div style="display:flex;justify-content:space-between"><span>${i.species}${i.is_special_request?' · quote requested':''}</span><span class="mono">${fmtKg(i.qty_kg)}kg${i.unit_price_per_kg?` · $${(i.unit_price_per_kg*i.qty_kg).toFixed(2)}`:''}</span></div>
         ${i.note?`<div style="font-size:12px;color:var(--warn);margin-top:2px">↳ "${i.note}"</div>`:''}
         ${i.species==='Mixed Oyster'?mixedOysterHintHTML(i.qty_kg):''}
-        ${i.species==='Farmers Selection'?farmersSelectionHintHTML(i.qty_kg, o.chef_id):''}
+        ${i.species==='Farmers Selection'?farmersSelectionHintHTML(i.qty_kg, o.chef_id, o.requested_date):''}
       </div>`).join("")}</div>
       ${o.notes?`<div style="margin-top:10px;font-size:13px;color:var(--muted)">Note: ${o.notes}</div>`:''}
       <div class="order-item-row" style="margin-top:6px"><span>Delivery</span><span class="mono">$${fee.toFixed(2)}</span></div>
