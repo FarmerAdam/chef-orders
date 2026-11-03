@@ -352,7 +352,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.70"; // pre-launch build; 1.0 = first real launch — Farmers Selection never suggests more than is free, and warns if it can't fill the box. Address can be edited on the Chefs tab, and customers with no login can be saved with no email. Mixed Oyster split only uses oysters not already sold to direct orders, and says so if there isn't enough. Run sheet: large Dropped pill replaces the Delivered button and stays on the tile with the time, smaller Navigate and Call. 0.69: Farmers Selection only draws on stock not already sold: a species fully taken by other orders (e.g. 5kg of Black Pearl out of 5.4kg) drops out of the box. Same numbers as the wholesale cap. 0.68: Run sheet: drag tiles to change the route, and legs (Main Run / Bright Run), each with its own stops and load list. 0.67: Run sheet tab: each delivery day's stops in route order, what to load, tap to navigate/call/tick off, printable; private no-login link per driver that always opens the next run, no prices. 0.66: standing / one-off back to two independent columns, only the tops level (no gaps between standing cards). 0.65: standing cards back to their own size, still starting level with the one-off beside them. 0.64: Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.71"; // pre-launch build; 1.0 = first real launch — Retail Boxes for hubs: 300g of Mixed Oyster or Lion's Mane at $15, taken from that stock. Customers who pick up pay no delivery fee and stay off the run sheet.
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -592,6 +592,54 @@ function normalizeSpecies(s){
   return (s||"").toString().trim().toLowerCase().replace(/['’‘`]/g,"").replace(/\s+/g," ");
 }
 function priceFor(species){ const n=normalizeSpecies(species); return priceList.find(p=>normalizeSpecies(p.species)===n) || null; }
+/* Most things sell by the kg, a few by the box (Retail Boxes: 300g of Mixed
+   Oyster or Lion's Mane for $15, hubs only - Adam, 2026-11-03).
+   mn_price_list.unit_label says which. A per-box line keeps its count in qty_kg
+   and its price in unit_price_per_kg, so line totals need no special case, but
+   the count isn't a weight: anything adding up stock goes through kgOf, which
+   uses mn_price_list.kg_per_unit, and draws_from names the stock it comes out of. */
+function unitOf(species){ return priceFor(species)?.unit_label || 'kg'; }
+function isPerKg(species){ return unitOf(species)==='kg'; }
+function kgPerUnit(species){ return Number(priceFor(species)?.kg_per_unit)||0; }
+function kgOf(species, qty){ return (Number(qty)||0) * (isPerKg(species) ? 1 : kgPerUnit(species)); }
+function sourceOf(species){ return priceFor(species)?.draws_from || species; }
+// What this customer can order. Hubs-only items are hidden from everyone else.
+function pricesFor(chef){ return priceList.filter(p=>!p.hubs_only || chef?.is_hub); }
+// A draft order or standing order moved to another customer loses what they can't order.
+function keepOrderable(lines, chef){
+  const kept=lines.filter(l=>!priceFor(l.species)?.hubs_only || chef?.is_hub);
+  if(kept.length<lines.length) toast(`Removed ${lines.filter(l=>!kept.includes(l)).map(l=>l.species).join(', ')}: hubs only`);
+  return kept;
+}
+function fmtQty(species, qty, unit=unitOf(species)){
+  const n=Number(qty);
+  if(unit==='kg') return `${fmtKg(n)}kg`;
+  return `${fmtKg(n)} ${n===1?unit:unit+(/(x|s|ch|sh)$/.test(unit)?'es':'s')}`;
+}
+// "12kg · 3 boxes". Items are {species, qty_kg}, plus unit on the driver's page, which has no price list.
+function qtyTotalLabel(items){
+  const byUnit={};
+  for(const i of items){ const u=i.unit||unitOf(i.species); byUnit[u]=(byUnit[u]||0)+(Number(i.qty_kg)||0); }
+  const others=Object.entries(byUnit).filter(([u])=>u!=='kg').map(([u,n])=>fmtQty(null,n,u));
+  return [...(byUnit.kg!=null||!others.length?[fmtQty(null,byUnit.kg||0,'kg')]:[]), ...others].join(' · ');
+}
+// Boxes come in whole numbers. 0 means nothing valid was entered.
+function parseQty(species, val){
+  const q=parseFloat(val);
+  if(!q||q<=0) return 0;
+  return isPerKg(species) ? q : Math.max(1,Math.round(q));
+}
+function qtyAttrs(species){ return isPerKg(species) ? 'step="0.5"' : 'step="1" data-whole="1"'; }
+function qtyVal(el){
+  const q=parseFloat(el.value);
+  return el.dataset.whole && q>0 ? Math.max(1,Math.round(q)) : el.value;
+}
+// Keeps an "add" row's quantity box in step with the item picked next to it.
+function syncQtyInput(sel, inputId){
+  const inp=$(inputId); if(!inp) return;
+  const kg=isPerKg(sel.value);
+  inp.placeholder=kg?'kg':'qty'; inp.step=kg?'0.5':'1';
+}
 /* A price-list row can be "on special" — a temporary flat override (e.g.
    Farmers Selection normally $40/kg, $35/kg this week) set by Adam/Em in
    the Prices tab. This is the ONE place that decides what a species
@@ -609,9 +657,9 @@ function priceLabelHTML(p){
   const eff = effectivePrice(p);
   if(eff==null) return "POA";
   if(p.on_special && p.special_price_per_kg!=null && p.unit_price_per_kg!=null){
-    return `<span style="text-decoration:line-through;opacity:.55;margin-right:5px">$${Number(p.unit_price_per_kg).toFixed(2)}</span>$${eff.toFixed(2)}/kg`;
+    return `<span style="text-decoration:line-through;opacity:.55;margin-right:5px">$${Number(p.unit_price_per_kg).toFixed(2)}</span>$${eff.toFixed(2)}/${unitOf(p.species)}`;
   }
-  return `$${eff.toFixed(2)}/kg`;
+  return `$${eff.toFixed(2)}/${unitOf(p.species)}`;
 }
 function yieldFor(species){ const n=normalizeSpecies(species); return yieldDefaults.find(y=>normalizeSpecies(y.species)===n) || null; }
 
@@ -867,7 +915,7 @@ function stockAfterOrders(deliveryDate, ignore){
   const ignored = c => ignore.some(x=>normalizeSpecies(x)===normalizeSpecies(c.item));
   const cap = data ? computeCap({...data, committed:(data.committed||[]).filter(c=>!ignored(c))}) : null;
   if(cap) return cap.rows.filter(r=>r.left>0).map(r=>({species:r.species, displayConservative:r.left}));
-  const ordered = species => (data?.committed||[]).filter(c=>normalizeSpecies(c.item)===normalizeSpecies(species)).reduce((t,c)=>t+(Number(c.kg)||0),0);
+  const ordered = species => (data?.committed||[]).filter(c=>normalizeSpecies(sourceOf(c.item))===normalizeSpecies(species)).reduce((t,c)=>t+kgOf(c.item,c.kg),0);
   return computeAvailabilityBoard()
     .map(e => ({...e, displayConservative:e.displayConservative-ordered(e.species)}))
     .filter(e => e.displayConservative > 0);
@@ -1064,6 +1112,7 @@ function renderBoardView(){
     </div>
     ${renderFarmersSelectionCard()}
     ${renderMixedOysterCard()}
+    ${renderPerBoxCards()}
     <div class="card board-card">${rows}</div>
     ${specialsHtml}
     <div class="sticky-cart-bar ${cartCount()?'show':''}" onclick="setChefTab('cart')">
@@ -1137,13 +1186,39 @@ function addMixedOysterToCart(){
   setChefTab('cart');
 }
 
+/* ----- Items sold by the box ----- */
+function renderPerBoxCards(){
+  const cap = chefCap();
+  return pricesFor(myChefRow).filter(p=>!isPerKg(p.species) && !p.special_only).map(p=>{
+    const left = capLeftFor(cap, p.species);
+    const grams = Math.round(kgPerUnit(p.species)*1000);
+    return `
+    <div class="card fs-card">
+      <div class="fs-card-head">
+        <div>
+          <div class="section-title" style="margin-bottom:4px">${esc(p.species)}</div>
+          ${grams||p.notes?`<div class="fs-tag">${[grams?`${grams}g ${esc(p.unit_label)}`:'', p.notes?esc(p.notes):''].filter(Boolean).join(' · ')}</div>`:''}
+        </div>
+        <span class="board-price mono">${priceLabelHTML(p)}</span>
+      </div>
+      ${left!=null?`<div style="font-size:12px;margin-top:8px;color:${left>0?'var(--muted)':'var(--danger)'}">${left>0?`Up to ${fmtQty(p.species,left)} available to order`:'Fully booked this week'}</div>`:''}
+      <div class="board-row-order" style="margin-top:12px">
+        <input type="number" min="0" ${qtyAttrs(p.species)} placeholder="qty" class="qty-input" id="qty_${cssId(p.species)}" value="${cart[p.species]||''}" oninput="setCartQty('${escSpecies(p.species)}', this.value)">
+      </div>
+    </div>`;
+  }).join("");
+}
+
 function cssId(s){ return s.replace(/[^a-zA-Z0-9]/g,'_'); }
 function escSpecies(s){ return s.replace(/'/g,"\\'"); }
 /* Delivery fees, GST-inclusive. Only two tiers today — add more here if a
    new remote area comes up rather than building a full postcode map. */
 const DELIVERY_FEES = { standard: 10.00, remote_courier: 22.00 };
 const DELIVERY_ZONE_LABELS = { standard: "Standard, Thursday delivery ($10 inc. GST)", remote_courier: "Mansfield/Benalla courier, Wednesday delivery ($22 inc. GST)" };
-function deliveryFeeFor(chef){ return DELIVERY_FEES[chef?.delivery_zone] ?? DELIVERY_FEES.standard; }
+function deliveryFeeFor(chef){
+  if(chef?.is_pickup) return 0; // they collect it themselves
+  return DELIVERY_FEES[chef?.delivery_zone] ?? DELIVERY_FEES.standard;
+}
 // Which weekday each zone delivers on (0=Sun..6=Sat) - added 2026-08-06
 // alongside the Mansfield/Benalla courier route moving to Wednesday.
 // Cutoff is always 2 days before delivery for every zone, same relative
@@ -1161,8 +1236,8 @@ const SPECIES_PALETTE = {
 function speciesColor(s){ return SPECIES_PALETTE[s] || "#A8331D"; }
 
 function setCartQty(species, val){
-  const q = parseFloat(val);
-  if(!q || q<=0) delete cart[species]; else cart[species]=q;
+  const q = parseQty(species, val);
+  if(!q) delete cart[species]; else cart[species]=q;
   // update sticky bar + cart tab badge without a full re-render (keeps focus in the input)
   const bar = document.querySelector(".sticky-cart-bar");
   if(bar){ bar.classList.toggle("show", cartCount()>0); bar.querySelector("span").textContent = `${cartCount()} item${cartCount()===1?'':'s'} in your order`; }
@@ -1228,14 +1303,14 @@ function renderCartView(){
     const noteVal = cartNotes[species]||'';
     // left for this item given the rest of the cart - same figure the board shows
     const capLeft = price?.special_only ? null : capLeftFor(chefCap(items.filter(([sp])=>sp!==species).map(([item,kg])=>({item,kg}))), species);
-    const capWarn = capLeft!=null && qty > capLeft + 0.05 ? `<div style="font-size:12px;color:var(--danger);margin-top:2px">Only ${fmtKg(Math.max(0, capLeft))}kg left this week</div>` : '';
+    const capWarn = capLeft!=null && qty > capLeft + 0.05 ? `<div style="font-size:12px;color:var(--danger);margin-top:2px">Only ${fmtQty(species, Math.max(0, capLeft))} left this week</div>` : '';
     return `<div class="cart-row">
       <div>
         <div style="font-weight:600">${species}</div>
         <div style="font-size:12px;color:var(--muted)">${eff!=null?priceLabelHTML(price):'Price on request'}</div>${capWarn}
       </div>
       <div class="cart-row-controls">
-        <input type="number" min="0" step="0.5" class="qty-input" value="${qty}" oninput="setCartQty('${escSpecies(species)}', this.value); renderChefTab()">
+        <input type="number" min="0" ${qtyAttrs(species)} class="qty-input" value="${qty}" oninput="setCartQty('${escSpecies(species)}', this.value); renderChefTab()">
         <div class="mono" style="width:70px;text-align:right">${lineTotal!=null?'$'+lineTotal.toFixed(2):'—'}</div>
         <button class="btn-ghost btn-sm" onclick="setCartQty('${escSpecies(species)}', 0); renderChefTab()" style="border:none;color:var(--danger)">✕</button>
       </div>
@@ -1254,7 +1329,7 @@ function renderCartView(){
         :existingForThisWeek?`<div class="note-banner" style="margin-bottom:14px;border-color:var(--warn)">You already have an order in for this ${nextDeliveryWeekday}. Placing this will add a <b>separate, second order</b> for the same delivery — not change the existing one.</div>`:''}
       ${rows}
       <div class="order-item-row" style="padding:12px 0;border-bottom:1px solid var(--cream)">
-        <span>Delivery</span><span class="mono">$${deliveryFee.toFixed(2)}</span>
+        <span>${myChefRow?.is_pickup?'Pickup':'Delivery'}</span><span class="mono">$${deliveryFee.toFixed(2)}</span>
       </div>
       <div class="cart-total">
         <span>Estimated total</span>
@@ -1340,7 +1415,7 @@ async function submitOrder(){
     const fresh = await loadWeekAvail(ws);
     const over = capOverages(computeCap(fresh, items.filter(([sp])=>!priceFor(sp)?.special_only).map(([item,kg])=>({item,kg}))), items.map(([item,kg])=>({item,kg})));
     if(over.length){
-      toast(`Sorry, that's more than we have left: ${over.map(o=>`${o.item} (${fmtKg(o.over)}kg over)`).join(', ')}`);
+      toast(`Sorry, that's more than we have left: ${over.map(o=>`${o.item} (${fmtQty(o.item,o.over)} over)`).join(', ')}`);
       renderChefTab();
       return;
     }
@@ -1393,7 +1468,7 @@ function renderHistoryView(){
               <div style="display:flex;justify-content:space-between;align-items:center">
                 <span>${i.species}</span>
                 <span style="display:flex;align-items:center;gap:8px">
-                  <input type="number" min="0" step="0.5" class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="updateOrderItemQty('${i.id}','${o.id}',this.value)">
+                  <input type="number" min="0" ${qtyAttrs(i.species)} class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="updateOrderItemQty('${i.id}','${o.id}',qtyVal(this))">
                   <button onclick="removeOrderItem('${i.id}','${o.id}')" style="color:var(--danger);border:none;background:none">✕</button>
                 </span>
               </div>
@@ -1401,7 +1476,7 @@ function renderHistoryView(){
             </div>`;
           }).join("")}
           <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-            <select id="add_orderitem_sp_${o.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escAttr(p.species)}">${p.species}</option>`).join("")}</select>
+            <select id="add_orderitem_sp_${o.id}" style="flex:1;min-width:140px" onchange="syncQtyInput(this,'add_orderitem_qty_${o.id}')"><option value="">Add a species…</option>${pricesFor(myChefRow).map(p=>`<option value="${escAttr(p.species)}">${p.species}</option>`).join("")}</select>
             <input type="number" min="0" step="0.5" id="add_orderitem_qty_${o.id}" placeholder="kg" style="width:80px">
             <button class="btn btn-ghost btn-sm" onclick="addOrderItem('${o.id}')">Add</button>
           </div>
@@ -1423,7 +1498,7 @@ function renderHistoryView(){
       </div>
       <div style="margin-top:10px">
         ${items.map(i=>`<div class="order-item-row" style="display:block">
-          <div style="display:flex;justify-content:space-between"><span>${i.species}</span><span class="mono">${fmtKg(i.qty_kg)}kg</span></div>
+          <div style="display:flex;justify-content:space-between"><span>${i.species}</span><span class="mono">${fmtQty(i.species,i.qty_kg)}</span></div>
           ${i.note?`<div style="font-size:12px;color:var(--muted);margin-top:2px">↳ "${i.note}"</div>`:''}
         </div>`).join("")}
       </div>
@@ -1447,7 +1522,7 @@ async function removeOrderItem(itemId,orderId){
 }
 async function addOrderItem(orderId){
   const species=$(`add_orderitem_sp_${orderId}`).value;
-  const qty=parseFloat($(`add_orderitem_qty_${orderId}`).value);
+  const qty=parseQty(species, $(`add_orderitem_qty_${orderId}`).value);
   if(!species||!qty||qty<=0){ toast("Pick a species and quantity"); return; }
   const order=chefOrders.find(o=>o.id===orderId);
   const existing=(order?.mn_order_items||[]).find(i=>i.species===species);
@@ -1491,12 +1566,12 @@ function renderStandingView(){
         ${items.map(i=>`<div class="order-item-row">
           <span>${i.species}</span>
           <span style="display:flex;align-items:center;gap:8px">
-            <input type="number" min="0" step="0.5" class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="updateStandingItem('${i.id}','${so.id}',this.value)">
+            <input type="number" min="0" ${qtyAttrs(i.species)} class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="updateStandingItem('${i.id}','${so.id}',qtyVal(this))">
             <button onclick="removeStandingItem('${i.id}','${so.id}')" style="color:var(--danger);border:none;background:none">✕</button>
           </span>
         </div>`).join("")}
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-          <select id="add_item_sp_${so.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escAttr(p.species)}">${p.species}</option>`).join("")}</select>
+          <select id="add_item_sp_${so.id}" style="flex:1;min-width:140px" onchange="syncQtyInput(this,'add_item_qty_${so.id}')"><option value="">Add a species…</option>${pricesFor(myChefRow).map(p=>`<option value="${escAttr(p.species)}">${p.species}</option>`).join("")}</select>
           <input type="number" min="0" step="0.5" id="add_item_qty_${so.id}" placeholder="kg" style="width:80px">
           <button class="btn btn-ghost btn-sm" onclick="addStandingItem('${so.id}')">Add</button>
         </div>
@@ -1552,7 +1627,7 @@ async function removeStandingItem(itemId,soId){
 }
 async function addStandingItem(soId){
   const species=$(`add_item_sp_${soId}`).value;
-  const qty=parseFloat($(`add_item_qty_${soId}`).value);
+  const qty=parseQty(species, $(`add_item_qty_${soId}`).value);
   if(!species||!qty||qty<=0){ toast("Pick a species and quantity"); return; }
   const so=chefStandingOrders.find(s=>s.id===soId);
   const existing=(so?.mn_standing_order_items||[]).find(i=>i.species===species);
@@ -1607,8 +1682,7 @@ function standingCustomerCard(chef, so, runs, orderCard){
   const thu = currentDeliveryThursday(chef.delivery_zone);
   const thuLabel = new Date(thu+'T00:00:00').toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short'});
   const isSkipping = so.active && so.skip_date===thu;
-  const kg = items.reduce((t,i)=>t+Number(i.qty_kg),0);
-  const summary = items.map(i=>`${esc(i.species)} ${fmtKg(i.qty_kg)}kg`).join(' · ') || 'No items';
+  const summary = items.map(i=>`${esc(i.species)} ${fmtQty(i.species,i.qty_kg)}`).join(' · ') || 'No items';
   const editing = editingStandingId===so.id;
   const today = todayISO();
   const runRows = runs.map(o=> editingOrderId===o.id ? `<div style="margin-top:10px">${orderCard(o)}</div>` : `<div class="so-run">
@@ -1622,12 +1696,12 @@ function standingCustomerCard(chef, so, runs, orderCard){
       ${items.map(i=>`<div class="order-item-row">
         <span>${esc(i.species)}</span>
         <span style="display:flex;align-items:center;gap:8px">
-          <input type="number" min="0" step="0.5" class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="staffUpdateStandingItem('${i.id}',this.value)">
+          <input type="number" min="0" ${qtyAttrs(i.species)} class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="staffUpdateStandingItem('${i.id}',qtyVal(this))">
           <button onclick="staffRemoveStandingItem('${i.id}')" style="color:var(--danger);border:none;background:none">✕</button>
         </span>
       </div>`).join("")}
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-        <select id="staff_add_item_sp_${so.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escAttr(p.species)}">${esc(p.species)}</option>`).join("")}</select>
+        <select id="staff_add_item_sp_${so.id}" style="flex:1;min-width:140px" onchange="syncQtyInput(this,'staff_add_item_qty_${so.id}')"><option value="">Add a species…</option>${pricesFor(chef).map(p=>`<option value="${escAttr(p.species)}">${esc(p.species)}</option>`).join("")}</select>
         <input type="number" min="0" step="0.5" id="staff_add_item_qty_${so.id}" placeholder="kg" style="width:80px">
         <button class="btn btn-ghost btn-sm" style="width:auto" onclick="staffAddStandingItem('${so.id}')">Add</button>
       </div>
@@ -1645,7 +1719,7 @@ function standingCustomerCard(chef, so, runs, orderCard){
     <div class="order-card-top">
       <div>
         <div style="font-weight:700">${esc(chef.business_name)}${so.active?'<span class="pill standing">↻ Standing</span>':'<span class="pill muted" style="font-size:11px;padding:2px 8px;margin-left:6px">Paused</span>'}</div>
-        <div style="font-size:12px;color:var(--muted)">Every ${weekdayName(zoneDay)} · ${fmtKg(kg)}kg${isSkipping && !runs.some(o=>o.requested_date===thu)?` · <span style="color:var(--warn)">skipping ${thuLabel}</span>`:''}</div>
+        <div style="font-size:12px;color:var(--muted)">Every ${weekdayName(zoneDay)} · ${qtyTotalLabel(items)}${isSkipping && !runs.some(o=>o.requested_date===thu)?` · <span style="color:var(--warn)">skipping ${thuLabel}</span>`:''}</div>
       </div>
       <button class="btn btn-ghost btn-sm" style="width:auto" onclick="editingStandingId=${editing?'null':`'${so.id}'`}; renderStaffApp()">${editing?'Done':'Edit'}</button>
     </div>
@@ -1656,13 +1730,13 @@ function standingCustomerCard(chef, so, runs, orderCard){
 function renderNewStandingForm(){
   if(!showNewStanding) return '';
   if(!staffStandingChefId && chefs.length) staffStandingChefId = chefs[0].id;
-  const draftLines = staffStandingDraft.map((l,i)=>`<div class="order-item-row"><span>${esc(l.species)}</span><span class="mono">${fmtKg(l.qty_kg)}kg <button onclick="removeStaffStandingDraftLine(${i})" style="color:var(--danger);margin-left:8px;border:none;background:none">✕</button></span></div>`).join("");
+  const draftLines = staffStandingDraft.map((l,i)=>`<div class="order-item-row"><span>${esc(l.species)}</span><span class="mono">${fmtQty(l.species,l.qty_kg)} <button onclick="removeStaffStandingDraftLine(${i})" style="color:var(--danger);margin-left:8px;border:none;background:none">✕</button></span></div>`).join("");
   return `<div class="card">
     <div class="section-title">New standing order</div>
     <label for="staff_standing_chef">Customer</label>
-    <select id="staff_standing_chef" onchange="staffStandingChefId=this.value">${chefs.map(c=>`<option value="${c.id}" ${c.id===staffStandingChefId?'selected':''}>${esc(c.business_name)}</option>`).join("")}</select>
+    <select id="staff_standing_chef" onchange="setStaffStandingChef(this.value)">${chefs.map(c=>`<option value="${c.id}" ${c.id===staffStandingChefId?'selected':''}>${esc(c.business_name)}</option>`).join("")}</select>
     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-      <select id="staff_standing_species" style="flex:1;min-width:140px">${priceList.map(p=>`<option value="${escAttr(p.species)}">${esc(p.species)}</option>`).join("")}</select>
+      <select id="staff_standing_species" style="flex:1;min-width:140px" onchange="syncQtyInput(this,'staff_standing_qty')">${pricesFor(chefs.find(c=>c.id===staffStandingChefId)).map(p=>`<option value="${escAttr(p.species)}">${esc(p.species)}</option>`).join("")}</select>
       <input id="staff_standing_qty" type="number" min="0" step="0.5" placeholder="kg" style="width:80px">
       <button class="btn btn-ghost btn-sm" style="width:auto" onclick="addStaffStandingDraftLine()">Add</button>
     </div>
@@ -1673,9 +1747,14 @@ function renderNewStandingForm(){
     </div>
   </div>`;
 }
+function setStaffStandingChef(id){
+  staffStandingChefId=id;
+  staffStandingDraft=keepOrderable(staffStandingDraft, chefs.find(c=>c.id===id));
+  renderStaffApp();
+}
 function addStaffStandingDraftLine(){
   const species=$("staff_standing_species").value;
-  const qty=parseFloat($("staff_standing_qty").value);
+  const qty=parseQty(species, $("staff_standing_qty").value);
   if(!qty||qty<=0){ toast("Enter a quantity"); return; }
   staffStandingDraft.push({species,qty_kg:qty});
   $("staff_standing_qty").value="";
@@ -1756,7 +1835,7 @@ async function staffRemoveStandingItem(itemId){
 }
 async function staffAddStandingItem(soId){
   const species=$(`staff_add_item_sp_${soId}`).value;
-  const qty=parseFloat($(`staff_add_item_qty_${soId}`).value);
+  const qty=parseQty(species, $(`staff_add_item_qty_${soId}`).value);
   if(!species||!qty||qty<=0){ toast("Pick a species and quantity"); return; }
   const so=allStandingOrders.find(s=>s.id===soId);
   const existing=(so?.mn_standing_order_items||[]).find(i=>i.species===species);
@@ -1769,7 +1848,7 @@ async function staffAddStandingItem(soId){
 /* ----- PREFERENCES (drives Farmers Selection box) ----- */
 const PREF_LABELS = { less:"Less", normal:"Normal", more:"More" };
 function renderPrefsView(){
-  const species = priceList.map(p=>p.species).sort();
+  const species = priceList.filter(p=>isPerKg(p.species)).map(p=>p.species).sort();
   const rows = species.map(sp=>{
     const current = prefFor(sp);
     return `<div class="pref-row">
@@ -1926,14 +2005,16 @@ function computeCap(data, extra){
   }
   const bundleKg = {};
   for(const c of [...(data.committed||[]), ...(extra||[])]){
-    const kg = Number(c.kg)||0;
-    if(BUNDLE_SOURCES.some(([b])=>normalizeSpecies(b)===normalizeSpecies(c.item))){
-      const name = BUNDLE_SOURCES.find(([b])=>normalizeSpecies(b)===normalizeSpecies(c.item))[0];
+    const kg = kgOf(c.item, c.kg);
+    const item = sourceOf(c.item); // a box counts against the stock it's packed from
+    if(!isPerKg(item)) continue;
+    if(BUNDLE_SOURCES.some(([b])=>normalizeSpecies(b)===normalizeSpecies(item))){
+      const name = BUNDLE_SOURCES.find(([b])=>normalizeSpecies(b)===normalizeSpecies(item))[0];
       bundleKg[name]=(bundleKg[name]||0)+kg; continue;
     }
-    const n = normalizeSpecies(c.item);
+    const n = normalizeSpecies(item);
     // ordered but not in the forecast at all (e.g. nothing fruiting) - shows as over
-    if(!rows[n]) rows[n] = { species:c.item, forecast:0, reserve:0, wholesale:0, committed:0, left:0 };
+    if(!rows[n]) rows[n] = { species:item, forecast:0, reserve:0, wholesale:0, committed:0, left:0 };
     rows[n].committed += kg; rows[n].left -= kg;
   }
   const bundles = {};
@@ -1955,9 +2036,14 @@ function computeCap(data, extra){
   return { rows:list, bundles, reservePct, updatedAt:updated,
            totalForecast:list.reduce((s,r)=>s+r.forecast,0), totalLeft:list.reduce((s,r)=>s+Math.max(0,r.left),0) };
 }
-// What's left of one item (species or bundle) in a computed cap; null if unknown.
+// What's left of one item (species or bundle) in a computed cap, in the item's
+// own unit (whole boxes for a box); null if unknown.
 function capLeftFor(cap, item){
   if(!cap) return null;
+  if(!isPerKg(item)){
+    const w = kgPerUnit(item), from = priceFor(item)?.draws_from;
+    return w && from ? Math.floor(capLeftFor(cap, from)/w + 1e-6) : null;
+  }
   const b = BUNDLE_SOURCES.find(([name])=>normalizeSpecies(name)===normalizeSpecies(item));
   if(b) return cap.bundles[b[0]].left;
   const r = cap.rows.find(r=>normalizeSpecies(r.species)===normalizeSpecies(item));
@@ -2038,7 +2124,7 @@ function groupRunStops(orders){
     for(const i of o.items||[]){
       const same=st.items.find(x=>normalizeSpecies(x.species)===normalizeSpecies(i.species));
       if(same) same.qty_kg=Number(same.qty_kg)+Number(i.qty_kg);
-      else st.items.push({species:i.species, qty_kg:Number(i.qty_kg)});
+      else st.items.push({species:i.species, qty_kg:Number(i.qty_kg), unit:i.unit||unitOf(i.species)});
       if(i.note) st.notes.push(`${i.species}: ${i.note}`);
     }
   }
@@ -2062,7 +2148,7 @@ function renderRunStop(st, n, isNext, canTick, draggable){
       <div class="run-addr">${st.address?esc(st.address):'<span style="color:var(--warn)">No address saved</span>'}</div>
       ${st.delivery_notes?`<div class="run-instr">${esc(st.delivery_notes)}</div>`:''}
       ${contact?`<div class="run-contact">${contact}</div>`:''}
-      <div class="run-items">${st.items.map(i=>`<div class="run-item"><span>${esc(i.species)}</span><span class="mono">${fmtKg(i.qty_kg)}kg</span></div>`).join('')}</div>
+      <div class="run-items">${st.items.map(i=>`<div class="run-item"><span>${esc(i.species)}</span><span class="mono">${fmtQty(i.species,i.qty_kg,i.unit)}</span></div>`).join('')}</div>
       ${st.notes.map(x=>`<div class="run-note">Note: ${esc(x)}</div>`).join('')}
       ${st.delivered
         ? `<div class="run-done-row">
@@ -2082,37 +2168,41 @@ function renderRunStop(st, n, isNext, canTick, draggable){
 /* The shared body: what to load, then the stops. `tools` is staff-only. */
 function renderRunBody(date, today, stops, tools, heading, draggable){
   const load={};
-  for(const st of stops) for(const i of st.items) load[i.species]=(load[i.species]||0)+Number(i.qty_kg);
-  const total=Object.values(load).reduce((a,b)=>a+b,0);
+  for(const st of stops) for(const i of st.items){
+    const l=load[i.species]=load[i.species]||{species:i.species, qty_kg:0, unit:i.unit};
+    l.qty_kg+=Number(i.qty_kg);
+  }
+  const loadItems=Object.values(load);
   const done=stops.filter(x=>x.delivered).length;
   const canTick=date<=today;
   const nextIdx=canTick?stops.findIndex(x=>!x.delivered):-1;
   return `<div class="run-head">
       <div>
         <h2>${fmtDayDate(date,{weekday:'long',day:'numeric',month:'long'})}</h2>
-        <div class="run-sub">${heading||''}${stops.length} stop${stops.length===1?'':'s'} · ${fmtKg(total)}kg${done?` · ${done} of ${stops.length} dropped`:''}</div>
+        <div class="run-sub">${heading||''}${stops.length} stop${stops.length===1?'':'s'} · ${qtyTotalLabel(loadItems)}${done?` · ${done} of ${stops.length} dropped`:''}</div>
       </div>
       ${tools||''}
     </div>
     ${!canTick?`<div class="run-sub no-print" style="margin-bottom:12px">Coming up. Stops can be ticked off on the day.</div>`:''}
     <div class="card run-load">
       <div class="section-title" style="margin-bottom:6px">Load</div>
-      ${Object.entries(load).sort((a,b)=>b[1]-a[1]).map(([sp,kg])=>`<div class="run-load-row"><span>${esc(sp)}</span><span class="mono">${fmtKg(kg)}kg</span></div>`).join('')}
+      ${loadItems.sort((a,b)=>b.qty_kg-a.qty_kg).map(l=>`<div class="run-load-row"><span>${esc(l.species)}</span><span class="mono">${fmtQty(l.species,l.qty_kg,l.unit)}</span></div>`).join('')}
     </div>
     <div id="runStopList">${stops.map((st,i)=>renderRunStop(st,i+1,i===nextIdx,canTick,draggable)).join('')}</div>`;
 }
 
 /* ----- staff tab ----- */
+function isPickupOrder(o){ return !!chefs.find(c=>c.id===o.chef_id)?.is_pickup; }
 function staffRunDays(){
   const today=todayISO(), end=addDaysISO(today,14), seen={};
   for(const o of allOrders){
-    if(o.status==='cancelled' || o.requested_date<today || o.requested_date>end) continue;
+    if(o.status==='cancelled' || o.requested_date<today || o.requested_date>end || isPickupOrder(o)) continue;
     (seen[o.requested_date]=seen[o.requested_date]||new Set()).add(o.chef_id);
   }
   return Object.keys(seen).sort().map(date=>({date, stops:seen[date].size}));
 }
 function staffRunOrders(date){
-  return allOrders.filter(o=>o.requested_date===date && o.status!=='cancelled').map(o=>{
+  return allOrders.filter(o=>o.requested_date===date && o.status!=='cancelled' && !isPickupOrder(o)).map(o=>{
     const c=chefs.find(x=>x.id===o.chef_id)||{};
     return {...o, business_name:c.business_name||o.mn_chefs?.business_name||'Unknown', contact_name:c.contact_name, phone:c.phone,
       address:c.address, delivery_notes:c.delivery_notes, route_order:c.route_order, route_leg:c.route_leg, items:o.mn_order_items||[]};
@@ -2138,9 +2228,11 @@ function renderRunView(){
     runLeg=pickLeg(all,runLeg);
     const stops=stopsOnLeg(all,runLeg);
     const noAddr=all.filter(x=>!x.address).length;
+    const pickups=[...new Set(allOrders.filter(o=>o.requested_date===runDate && o.status!=='cancelled' && isPickupOrder(o)).map(o=>chefs.find(c=>c.id===o.chef_id).business_name))];
     body=renderRunDays(days,runDate,'setRunDate')
       +renderLegChips(all,runLeg,'setRunLeg')
       +(noAddr?`<div class="card no-print" style="margin-bottom:14px;border:1.5px solid var(--warn);font-size:13px">${noAddr} stop${noAddr===1?' has':'s have'} no address. Navigate will search by business name until you add one under Edit route.</div>`:'')
+      +(pickups.length?`<div class="run-sub no-print" style="margin-bottom:12px">Picking up, not on this run: ${pickups.map(esc).join(', ')}</div>`:'')
       +renderRunBody(runDate,todayISO(),stops,tools,legHeading(all,runLeg),true);
   } else {
     body=`<div class="run-head"><div class="run-sub">Nothing to deliver in the next two weeks.</div>${tools}</div>`;
@@ -2150,7 +2242,7 @@ function renderRunView(){
 function setRunDate(d){ runDate=d; renderStaffTab(); }
 function setRunLeg(k){ runLeg=k; renderStaffTab(); }
 function routeChefs(leg, includeInactive){
-  return chefs.filter(c=>(includeInactive||c.active) && legKey(c.route_leg)===leg).sort((a,b)=>
+  return chefs.filter(c=>(includeInactive||c.active) && !c.is_pickup && legKey(c.route_leg)===leg).sort((a,b)=>
     (a.route_order??1e6)-(b.route_order??1e6) || String(a.business_name).localeCompare(String(b.business_name)));
 }
 function renderRouteEditor(){
@@ -2405,7 +2497,7 @@ function overdueOrders(){
     .sort((a,b)=>a.requested_date<b.requested_date?-1:1);
 }
 function orderLineSummary(o){
-  return (o.mn_order_items||[]).map(i=>`${esc(i.species)} ${fmtKg(i.qty_kg)}kg`).join(' · ') || 'No items';
+  return (o.mn_order_items||[]).map(i=>`${esc(i.species)} ${fmtQty(i.species,i.qty_kg)}`).join(' · ') || 'No items';
 }
 // Orders created from a standing order (mn_place_standing_orders) - shown
 // next to the customer name everywhere an order is listed.
@@ -2475,7 +2567,7 @@ function renderCapSummaryView(){
     for(const o of os) for(const i of (o.mn_order_items||[])) pick[i.species]=(pick[i.species]||0)+Number(i.qty_kg);
     return `<div class="card" style="margin-bottom:14px">
       <div class="section-title">${fmtDayDate(day,{weekday:'long',day:'numeric',month:'short'})} · ${os.length} order${os.length===1?'':'s'}</div>
-      <div style="font-size:13px;margin-bottom:10px"><b>Pick:</b> ${Object.entries(pick).sort((a,b)=>b[1]-a[1]).map(([s,k])=>`${esc(s)} <span class="mono">${fmtKg(k)}kg</span>`).join(' · ')}</div>
+      <div style="font-size:13px;margin-bottom:10px"><b>Pick:</b> ${Object.entries(pick).sort((a,b)=>b[1]-a[1]).map(([s,k])=>`${esc(s)} <span class="mono">${fmtQty(s,k)}</span>`).join(' · ')}</div>
       ${os.map(o=>`<div class="order-item-row" style="align-items:center;gap:10px">
         <span><b>${esc(o.mn_chefs?.business_name||'Unknown')}</b>${standingPill(o)} <span style="color:var(--muted);font-size:12px">${orderLineSummary(o)}</span></span>
         <span style="display:flex;align-items:center;gap:8px;flex-shrink:0">
@@ -2529,10 +2621,11 @@ function renderStaffOrderForm(){
   const base = capBaseFor(staffOrderDate);
   const dates = upcomingDeliveryDates(4);
   if(!dates.includes(staffOrderDate)) dates.push(staffOrderDate);
-  const speciesOpts = priceList.filter(p=>!p.special_only).map(p=>{
+  const orderable = pricesFor(chef);
+  const speciesOpts = orderable.filter(p=>!p.special_only).map(p=>{
     const left = capLeftFor(base, p.species);
-    return `<option value="${escAttr(p.species)}">${esc(p.species)}${left!=null?` — ${left>0.05?fmtKg(left)+'kg left':'none left'}`:''}</option>`;
-  }).join("") + priceList.filter(p=>p.special_only).map(p=>`<option value="${escAttr(p.species)}">${esc(p.species)} (special)</option>`).join("");
+    return `<option value="${escAttr(p.species)}">${esc(p.species)}${left!=null?` — ${left>0.05?fmtQty(p.species,left)+' left':'none left'}`:''}</option>`;
+  }).join("") + orderable.filter(p=>p.special_only).map(p=>`<option value="${escAttr(p.species)}">${esc(p.species)} (special)</option>`).join("");
   const customerHtml = addingCustomer ? `
       <div style="border:1px dashed var(--cream);border-radius:10px;padding:12px;margin-bottom:6px">
         <div style="font-weight:700;margin-bottom:6px">New customer</div>
@@ -2562,7 +2655,7 @@ function renderStaffOrderForm(){
       <div style="font-size:12px;margin-top:6px">${base?forecastAgeNote(base):capReady?'<span style="color:var(--muted)">No forecast that far ahead — no availability check.</span>':''}</div>
       <label for="staff_order_species">Add</label>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <select id="staff_order_species" style="flex:1;min-width:180px">${speciesOpts}</select>
+        <select id="staff_order_species" style="flex:1;min-width:180px" onchange="syncQtyInput(this,'staff_order_qty')">${speciesOpts}</select>
         <input id="staff_order_qty" type="number" min="0" step="0.5" placeholder="kg" style="width:80px" onkeydown="if(event.key==='Enter') staffAddOrderLine()">
         <button class="btn btn-ghost" onclick="staffAddOrderLine()">Add</button>
       </div>
@@ -2578,6 +2671,7 @@ function refreshStaffOrderForm(){
 }
 function setStaffOrderChef(id){
   staffOrderChefId=id;
+  staffDraftOrder=keepOrderable(staffDraftOrder, chefs.find(c=>c.id===id));
   staffOrderDate=defaultDateForChef(chefs.find(c=>c.id===id));
   ensureWeekLoaded(staffOrderDate);
 }
@@ -2596,7 +2690,7 @@ async function staffAddCustomer(){
   }).select().single();
   if(error){ toast("Couldn't add customer: "+error.message); return; }
   await loadStaffOnlyData();
-  addingCustomer=false; staffOrderChefId=data.id; staffOrderDate=defaultDateForChef(data);
+  addingCustomer=false; staffOrderChefId=data.id; staffDraftOrder=keepOrderable(staffDraftOrder, data); staffOrderDate=defaultDateForChef(data);
   toast(`Added ${business_name}`);
   renderStaffApp();
 }
@@ -2669,7 +2763,7 @@ function computeWeeklySummary(){
   // next week's (and every future week's) order bleeds into "this week".
   const wholesaleKg = allOrders
     .filter(o=>o.status!=='cancelled' && new Date(o.requested_date)>=sevenDaysAgo && new Date(o.requested_date)<=now)
-    .reduce((s,o)=> s + (o.mn_order_items||[]).reduce((ss,i)=>ss+(Number(i.qty_kg)||0),0), 0);
+    .reduce((s,o)=> s + (o.mn_order_items||[]).reduce((ss,i)=>ss+kgOf(i.species,i.qty_kg),0), 0);
   return { grownKg, wholesaleKg, availableKg: Math.max(0, grownKg-wholesaleKg) };
 }
 /* Weighted average retail $/kg across whatever was actually harvested in
@@ -2859,7 +2953,7 @@ function renderOrdersView(){
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span>${i.species}${i.is_special_request?' · quote requested':''}</span>
               <span style="display:flex;align-items:center;gap:8px">
-                <input type="number" min="0" step="0.5" class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="staffUpdateOrderItemQty('${i.id}','${o.id}',this.value)">
+                <input type="number" min="0" ${qtyAttrs(i.species)} class="qty-input" style="width:70px" value="${i.qty_kg}" onchange="staffUpdateOrderItemQty('${i.id}','${o.id}',qtyVal(this))">
                 <button onclick="staffRemoveOrderItem('${i.id}','${o.id}')" style="color:var(--danger);border:none;background:none">✕</button>
               </span>
             </div>
@@ -2867,7 +2961,7 @@ function renderOrdersView(){
             ${i.species==='Farmers Selection'?farmersSelectionHintHTML(i.qty_kg, o.chef_id, o.requested_date):''}
           </div>`).join("")}
           <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-            <select id="add_staff_orderitem_sp_${o.id}" style="flex:1;min-width:140px"><option value="">Add a species…</option>${priceList.map(p=>`<option value="${escAttr(p.species)}">${p.species}</option>`).join("")}</select>
+            <select id="add_staff_orderitem_sp_${o.id}" style="flex:1;min-width:140px" onchange="syncQtyInput(this,'add_staff_orderitem_qty_${o.id}')"><option value="">Add a species…</option>${pricesFor(chefs.find(c=>c.id===o.chef_id)).map(p=>`<option value="${escAttr(p.species)}">${p.species}</option>`).join("")}</select>
             <input type="number" min="0" step="0.5" id="add_staff_orderitem_qty_${o.id}" placeholder="kg" style="width:80px">
             <button class="btn btn-ghost btn-sm" onclick="staffAddOrderItem('${o.id}')">Add</button>
           </div>
@@ -2890,7 +2984,7 @@ function renderOrdersView(){
         </select>
       </div>
       <div style="margin-top:10px">${items.map(i=>`<div class="order-item-row" style="display:block">
-        <div style="display:flex;justify-content:space-between"><span>${i.species}${i.is_special_request?' · quote requested':''}</span><span class="mono">${fmtKg(i.qty_kg)}kg${i.unit_price_per_kg?` · $${(i.unit_price_per_kg*i.qty_kg).toFixed(2)}`:''}</span></div>
+        <div style="display:flex;justify-content:space-between"><span>${i.species}${i.is_special_request?' · quote requested':''}</span><span class="mono">${fmtQty(i.species,i.qty_kg)}${i.unit_price_per_kg?` · $${(i.unit_price_per_kg*i.qty_kg).toFixed(2)}`:''}</span></div>
         ${i.note?`<div style="font-size:12px;color:var(--warn);margin-top:2px">↳ "${i.note}"</div>`:''}
         ${i.species==='Mixed Oyster'?mixedOysterHintHTML(i.qty_kg, o.requested_date):''}
         ${i.species==='Farmers Selection'?farmersSelectionHintHTML(i.qty_kg, o.chef_id, o.requested_date):''}
@@ -2923,8 +3017,8 @@ function renderOrdersView(){
       const byMonth = {};
       for(const o of past){ const m = new Date(o.requested_date+'T00:00:00').toLocaleDateString('en-AU',{month:'long',year:'numeric'}); (byMonth[m]=byMonth[m]||[]).push(o); }
       pastHtml += Object.entries(byMonth).map(([m, os])=>{
-        const kg = os.filter(o=>o.status!=='cancelled').reduce((t,o)=>t+(o.mn_order_items||[]).reduce((u,i)=>u+Number(i.qty_kg),0),0);
-        return `<div class="section-title" style="margin-top:6px">${m} · ${os.length} order${os.length===1?'':'s'} · ${fmtKg(kg)}kg</div>` +
+        const totals = qtyTotalLabel(os.filter(o=>o.status!=='cancelled').flatMap(o=>o.mn_order_items||[]));
+        return `<div class="section-title" style="margin-top:6px">${m} · ${os.length} order${os.length===1?'':'s'} · ${totals}</div>` +
           os.map(o=>editingOrderId===o.id ? orderCard(o) : `<div class="order-item-row" style="align-items:center;gap:10px;padding:8px 2px">
             <span><b>${esc(o.mn_chefs?.business_name||'Unknown')}</b>${standingPill(o)} · ${fmtDayDate(o.requested_date)} <span style="color:var(--muted);font-size:12px">${orderLineSummary(o)}</span></span>
             <span style="display:flex;align-items:center;gap:6px;flex-shrink:0"><span class="pill ${STATUS_PILL[o.status]||'muted'}">${o.status}</span><button class="btn btn-ghost btn-sm" style="width:auto" onclick="editingOrderId='${o.id}'; renderStaffApp()">Edit</button></span>
@@ -2954,12 +3048,14 @@ function renderOrdersReadout(){
   const ws = weekStartISO(next);
   const data = weekAvail[ws];
   if(!data) return '';
-  const ordered = (data.committed||[]).reduce((t,c)=>t+(Number(c.kg)||0),0);
+  const lines = (data.committed||[]).map(c=>({species:c.item, qty_kg:c.kg}));
+  const ordered = lines.reduce((t,l)=>t+kgOf(l.species,l.qty_kg),0);
+  const perBox = lines.filter(l=>!isPerKg(l.species));
   const cap = computeCap(data);
   const over = cap ? cap.rows.reduce((t,r)=>t+Math.max(0,-r.left),0) + Object.values(cap.bundles).reduce((t,b)=>t+b.over,0) : 0;
   const weekLabel = `${fmtDayDate(ws,{day:'numeric',month:'short'})} – ${fmtDayDate(addDaysISO(ws,6),{day:'numeric',month:'short'})}`;
   return `<div class="card orders-readout">
-    <div><div class="num">${fmtKg(ordered)}kg</div><div class="lbl">Ordered</div></div>
+    <div><div class="num">${fmtKg(ordered)}kg</div><div class="lbl">Ordered${perBox.length?` · incl. ${qtyTotalLabel(perBox)}`:''}</div></div>
     <div><div class="num" style="color:${!cap?'var(--muted)':cap.totalLeft<1?'var(--danger)':'var(--good)'}">${cap?fmtKg(cap.totalLeft)+'kg':'—'}</div><div class="lbl">Left${over>0.05?` · <span style="color:var(--danger)">${fmtKg(over)}kg over</span>`:''}</div></div>
     <div style="margin-left:auto;font-size:12px;color:var(--muted);align-self:center">Week of ${weekLabel}${cap?'':' · no MAVIS forecast yet'}</div>
   </div>`;
@@ -2981,8 +3077,8 @@ async function staffSetStandingFromOrder(orderId){
   const zoneDay=ZONE_DELIVERY_WEEKDAY[chef?.delivery_zone] ?? ZONE_DELIVERY_WEEKDAY.standard;
   const dayName=new Date(2026,0,4+zoneDay).toLocaleDateString('en-AU',{weekday:'long'}); // 4 Jan 2026 is a Sunday
   const existing=allStandingOrders.find(s=>s.chef_id===o.chef_id && s.active) || allStandingOrders.find(s=>s.chef_id===o.chef_id);
-  const name=prompt(`Repeat this every ${dayName} for ${chef?.business_name||'this customer'}?\n\n${items.map(i=>`${i.species} ${fmtKg(i.qty_kg)}kg`).join(', ')}`+
-    (existing?`\n\nThis replaces their current standing order (${(existing.mn_standing_order_items||[]).map(i=>`${i.species} ${fmtKg(i.qty_kg)}kg`).join(', ')||'no items'}).`:'')+`\n\nName it:`, existing?.name||"Usual order");
+  const name=prompt(`Repeat this every ${dayName} for ${chef?.business_name||'this customer'}?\n\n${items.map(i=>`${i.species} ${fmtQty(i.species,i.qty_kg)}`).join(', ')}`+
+    (existing?`\n\nThis replaces their current standing order (${(existing.mn_standing_order_items||[]).map(i=>`${i.species} ${fmtQty(i.species,i.qty_kg)}`).join(', ')||'no items'}).`:'')+`\n\nName it:`, existing?.name||"Usual order");
   if(name===null) return;
   const sameWeekDelivery=addDaysISO(weekStartISO(o.requested_date), (zoneDay+6)%7);
   const skip = o.status!=='cancelled' && sameWeekDelivery>=todayISO() ? sameWeekDelivery : null;
@@ -3002,7 +3098,7 @@ async function staffSetStandingFromOrder(orderId){
 }
 function staffAddOrderLine(){
   const species=$("staff_order_species").value;
-  const qty=parseFloat($("staff_order_qty").value);
+  const qty=parseQty(species, $("staff_order_qty").value);
   if(!species){ toast("Pick a species"); return; }
   if(!qty||qty<=0){ toast("Enter a quantity"); return; }
   const same=staffDraftOrder.find(l=>l.species===species);
@@ -3018,11 +3114,11 @@ function renderDraftLines(){
   const lines = staffDraftOrder.map((l,i)=>{
     const left=capLeftFor(cap, l.species);
     const flag = left==null ? '' : left < -0.05
-      ? `<div style="font-size:12px;color:var(--danger)">Over what's available by ${fmtKg(-left)}kg</div>`
-      : `<div style="font-size:12px;color:var(--muted)">${fmtKg(left)}kg still left after this</div>`;
-    return `<div class="order-item-row" style="display:block"><div style="display:flex;justify-content:space-between"><span>${esc(l.species)}</span><span class="mono">${fmtKg(l.qty_kg)}kg <button onclick="removeDraftLine(${i})" style="color:var(--danger);margin-left:8px;border:none;background:none">✕</button></span></div>${flag}</div>`;
+      ? `<div style="font-size:12px;color:var(--danger)">Over what's available by ${fmtQty(l.species,-left)}</div>`
+      : `<div style="font-size:12px;color:var(--muted)">${fmtQty(l.species,left)} still left after this</div>`;
+    return `<div class="order-item-row" style="display:block"><div style="display:flex;justify-content:space-between"><span>${esc(l.species)}</span><span class="mono">${fmtQty(l.species,l.qty_kg)} <button onclick="removeDraftLine(${i})" style="color:var(--danger);margin-left:8px;border:none;background:none">✕</button></span></div>${flag}</div>`;
   }).join("");
-  const feeLine = staffDraftOrder.length ? `<div class="order-item-row" style="color:var(--muted)"><span>Delivery (${DELIVERY_ZONE_LABELS[chef?.delivery_zone]||DELIVERY_ZONE_LABELS.standard})</span><span class="mono">$${deliveryFeeFor(chef).toFixed(2)}</span></div>` : '';
+  const feeLine = staffDraftOrder.length ? `<div class="order-item-row" style="color:var(--muted)"><span>${chef?.is_pickup?'Pickup, no delivery charge':`Delivery (${DELIVERY_ZONE_LABELS[chef?.delivery_zone]||DELIVERY_ZONE_LABELS.standard})`}</span><span class="mono">$${deliveryFeeFor(chef).toFixed(2)}</span></div>` : '';
   el.innerHTML = lines + feeLine;
   $("staffSubmitOrderBtn")?.classList.toggle("hidden", staffDraftOrder.length===0);
 }
@@ -3031,7 +3127,7 @@ async function staffSubmitOrder(){
   const chef=chefs.find(c=>c.id===staffOrderChefId);
   if(!chef||!staffDraftOrder.length||!staffOrderDate) return;
   const over=capOverages(staffCap(), staffDraftOrder.map(l=>({item:l.species, kg:l.qty_kg})));
-  if(over.length && !confirm(`This goes over what's available for that week:\n${over.map(o=>`• ${o.item}: over by ${fmtKg(o.over)}kg`).join("\n")}\n\nSave it anyway?`)) return;
+  if(over.length && !confirm(`This goes over what's available for that week:\n${over.map(o=>`• ${o.item}: over by ${fmtQty(o.item,o.over)}`).join("\n")}\n\nSave it anyway?`)) return;
   const btn=$("staffSubmitOrderBtn"); if(btn) btn.disabled=true;
   const {data:order,error}=await db.from("mn_orders").insert({chef_id:chef.id, order_source:'staff', status:'confirmed', requested_date:staffOrderDate, notes:staffOrderNotes.trim()||null, delivery_fee: deliveryFeeFor(chef)}).select().single();
   if(error){ toast("Couldn't save order: "+error.message); if(btn) btn.disabled=false; return; }
@@ -3068,7 +3164,7 @@ async function staffRemoveOrderItem(itemId,orderId){
 }
 async function staffAddOrderItem(orderId){
   const species=$(`add_staff_orderitem_sp_${orderId}`).value;
-  const qty=parseFloat($(`add_staff_orderitem_qty_${orderId}`).value);
+  const qty=parseQty(species, $(`add_staff_orderitem_qty_${orderId}`).value);
   if(!species||!qty||qty<=0){ toast("Pick a species and quantity"); return; }
   const order=allOrders.find(o=>o.id===orderId);
   const existing=(order?.mn_order_items||[]).find(i=>i.species===species);
@@ -3127,6 +3223,8 @@ function renderChefsView(){
         <select id="edit_chef_zone">
           ${Object.entries(DELIVERY_ZONE_LABELS).map(([k,label])=>`<option value="${k}" ${c.delivery_zone===k?'selected':''}>${label}</option>`).join("")}
         </select>
+        ${'is_hub' in c?`<label style="display:flex;align-items:center;gap:8px;margin-top:12px"><input id="edit_chef_hub" type="checkbox" style="width:auto" ${c.is_hub?'checked':''}> Food hub (can order hubs-only items like Retail Boxes)</label>`:''}
+        ${'is_pickup' in c?`<label style="display:flex;align-items:center;gap:8px;margin-top:8px"><input id="edit_chef_pickup" type="checkbox" style="width:auto" ${c.is_pickup?'checked':''}> Picks up (no delivery charge, not on the run sheet)</label>`:''}
         <div style="display:flex;gap:8px;margin-top:12px">
           <button class="btn btn-primary btn-sm" onclick="saveChefEdit('${c.id}')">Save</button>
           <button class="btn btn-ghost btn-sm" onclick="editingChefId=null;renderStaffApp();">Cancel</button>
@@ -3136,10 +3234,10 @@ function renderChefsView(){
     return `<div class="card" style="margin-bottom:12px">
       <div class="order-card-top">
         <div>
-          <div style="font-weight:700">${c.business_name}</div>
+          <div style="font-weight:700">${c.business_name}${c.is_hub?' <span class="pill good">Hub</span>':''}</div>
           <div style="font-size:12px;color:var(--muted)">${c.contact_name||''} ${c.email?'· '+c.email:''} ${c.phone?'· '+c.phone:''}</div>
           <div style="font-size:12px;margin-top:2px;${c.address?'color:var(--muted)':'color:var(--warn)'}">${c.address?esc(c.address):'No delivery address'}</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:2px">${DELIVERY_ZONE_LABELS[c.delivery_zone]||DELIVERY_ZONE_LABELS.standard}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${c.is_pickup?'Picks up, no delivery charge':(DELIVERY_ZONE_LABELS[c.delivery_zone]||DELIVERY_ZONE_LABELS.standard)}</div>
         </div>
         <span class="pill ${c.active?'good':'muted'}">${c.active?'active':'inactive'}</span>
       </div>
@@ -3258,7 +3356,10 @@ async function saveChefEdit(id){
   const hasLogin=!!chefs.find(c=>c.id===id)?.user_id;
   if(!business_name){ toast("Business name is required"); return; }
   if(hasLogin&&!email){ toast("Email is required: this customer signs in with it"); return; }
-  const {error}=await db.from("mn_chefs").update({business_name,contact_name,email,phone,delivery_zone,address}).eq("id",id);
+  const patch={business_name,contact_name,email,phone,delivery_zone,address};
+  if($("edit_chef_hub")) patch.is_hub=$("edit_chef_hub").checked;
+  if($("edit_chef_pickup")) patch.is_pickup=$("edit_chef_pickup").checked;
+  const {error}=await db.from("mn_chefs").update(patch).eq("id",id);
   if(error){ toast("Couldn't save: "+error.message); return; }
   editingChefId=null;
   toast("Saved");
@@ -3325,7 +3426,10 @@ function renderPricesView(){
         <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:12px;color:var(--muted)"><input type="checkbox" style="width:auto" ${p.special_only?'checked':''} onchange="updatePriceField('${escSpecies(p.species)}','special_only',this.checked)"> Quote only</label>
         <span class="mono">$</span>
         <input type="number" min="0" step="0.5" class="qty-input" style="width:80px" value="${p.unit_price_per_kg??''}" placeholder="POA" onchange="updatePriceField('${escSpecies(p.species)}','unit_price_per_kg',this.value?parseFloat(this.value):null)">
-        <span style="font-size:12px;color:var(--muted)">/kg</span>
+        <span style="font-size:12px;color:var(--muted)">/${esc(p.unit_label||'kg')}</span>
+        ${!isPerKg(p.species)?`<input type="number" min="0" step="0.05" class="qty-input" style="width:70px;margin-left:10px" value="${p.kg_per_unit??''}" placeholder="kg" onchange="updatePriceField('${escSpecies(p.species)}','kg_per_unit',parseFloat(this.value)||null)">
+        <span style="font-size:12px;color:var(--muted)">kg each${p.draws_from?`, from ${esc(p.draws_from)}`:''}</span>
+        <label style="display:flex;align-items:center;gap:6px;margin:0 0 0 10px;font-size:12px;color:var(--muted)"><input type="checkbox" style="width:auto" ${p.hubs_only?'checked':''} onchange="updatePriceField('${escSpecies(p.species)}','hubs_only',this.checked)"> Hubs only</label>`:''}
         <label style="display:flex;align-items:center;gap:6px;margin:0 0 0 10px;font-size:12px;color:var(--warn)"><input type="checkbox" style="width:auto" ${p.on_special?'checked':''} onchange="updatePriceField('${escSpecies(p.species)}','on_special',this.checked)"> On special</label>
         ${p.on_special?`<span class="mono">$</span><input type="number" min="0" step="0.5" class="qty-input" style="width:80px" value="${p.special_price_per_kg??''}" placeholder="special $" onchange="updatePriceField('${escSpecies(p.species)}','special_price_per_kg',this.value?parseFloat(this.value):null)"><span style="font-size:12px;color:var(--muted)">/kg this week</span>`:''}
       </div>`).join("")}
