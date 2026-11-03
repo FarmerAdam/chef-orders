@@ -352,7 +352,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.71"; // pre-launch build; 1.0 = first real launch — Retail Boxes for hubs: 300g of Mixed Oyster or Lion's Mane at $15, taken from that stock. Customers who pick up pay no delivery fee and stay off the run sheet.
+const APP_VERSION = "0.72"; // pre-launch build; 1.0 = first real launch — Customers with no delivery charge are back on the run sheet as normal stops.
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -1216,7 +1216,7 @@ function escSpecies(s){ return s.replace(/'/g,"\\'"); }
 const DELIVERY_FEES = { standard: 10.00, remote_courier: 22.00 };
 const DELIVERY_ZONE_LABELS = { standard: "Standard, Thursday delivery ($10 inc. GST)", remote_courier: "Mansfield/Benalla courier, Wednesday delivery ($22 inc. GST)" };
 function deliveryFeeFor(chef){
-  if(chef?.is_pickup) return 0; // they collect it themselves
+  if(chef?.is_pickup) return 0; // hubs pick up off the run, so no delivery charge
   return DELIVERY_FEES[chef?.delivery_zone] ?? DELIVERY_FEES.standard;
 }
 // Which weekday each zone delivers on (0=Sun..6=Sat) - added 2026-08-06
@@ -1329,7 +1329,7 @@ function renderCartView(){
         :existingForThisWeek?`<div class="note-banner" style="margin-bottom:14px;border-color:var(--warn)">You already have an order in for this ${nextDeliveryWeekday}. Placing this will add a <b>separate, second order</b> for the same delivery — not change the existing one.</div>`:''}
       ${rows}
       <div class="order-item-row" style="padding:12px 0;border-bottom:1px solid var(--cream)">
-        <span>${myChefRow?.is_pickup?'Pickup':'Delivery'}</span><span class="mono">$${deliveryFee.toFixed(2)}</span>
+        <span>Delivery</span><span class="mono">$${deliveryFee.toFixed(2)}</span>
       </div>
       <div class="cart-total">
         <span>Estimated total</span>
@@ -2192,17 +2192,16 @@ function renderRunBody(date, today, stops, tools, heading, draggable){
 }
 
 /* ----- staff tab ----- */
-function isPickupOrder(o){ return !!chefs.find(c=>c.id===o.chef_id)?.is_pickup; }
 function staffRunDays(){
   const today=todayISO(), end=addDaysISO(today,14), seen={};
   for(const o of allOrders){
-    if(o.status==='cancelled' || o.requested_date<today || o.requested_date>end || isPickupOrder(o)) continue;
+    if(o.status==='cancelled' || o.requested_date<today || o.requested_date>end) continue;
     (seen[o.requested_date]=seen[o.requested_date]||new Set()).add(o.chef_id);
   }
   return Object.keys(seen).sort().map(date=>({date, stops:seen[date].size}));
 }
 function staffRunOrders(date){
-  return allOrders.filter(o=>o.requested_date===date && o.status!=='cancelled' && !isPickupOrder(o)).map(o=>{
+  return allOrders.filter(o=>o.requested_date===date && o.status!=='cancelled').map(o=>{
     const c=chefs.find(x=>x.id===o.chef_id)||{};
     return {...o, business_name:c.business_name||o.mn_chefs?.business_name||'Unknown', contact_name:c.contact_name, phone:c.phone,
       address:c.address, delivery_notes:c.delivery_notes, route_order:c.route_order, route_leg:c.route_leg, items:o.mn_order_items||[]};
@@ -2228,11 +2227,9 @@ function renderRunView(){
     runLeg=pickLeg(all,runLeg);
     const stops=stopsOnLeg(all,runLeg);
     const noAddr=all.filter(x=>!x.address).length;
-    const pickups=[...new Set(allOrders.filter(o=>o.requested_date===runDate && o.status!=='cancelled' && isPickupOrder(o)).map(o=>chefs.find(c=>c.id===o.chef_id).business_name))];
     body=renderRunDays(days,runDate,'setRunDate')
       +renderLegChips(all,runLeg,'setRunLeg')
       +(noAddr?`<div class="card no-print" style="margin-bottom:14px;border:1.5px solid var(--warn);font-size:13px">${noAddr} stop${noAddr===1?' has':'s have'} no address. Navigate will search by business name until you add one under Edit route.</div>`:'')
-      +(pickups.length?`<div class="run-sub no-print" style="margin-bottom:12px">Picking up, not on this run: ${pickups.map(esc).join(', ')}</div>`:'')
       +renderRunBody(runDate,todayISO(),stops,tools,legHeading(all,runLeg),true);
   } else {
     body=`<div class="run-head"><div class="run-sub">Nothing to deliver in the next two weeks.</div>${tools}</div>`;
@@ -2242,7 +2239,7 @@ function renderRunView(){
 function setRunDate(d){ runDate=d; renderStaffTab(); }
 function setRunLeg(k){ runLeg=k; renderStaffTab(); }
 function routeChefs(leg, includeInactive){
-  return chefs.filter(c=>(includeInactive||c.active) && !c.is_pickup && legKey(c.route_leg)===leg).sort((a,b)=>
+  return chefs.filter(c=>(includeInactive||c.active) && legKey(c.route_leg)===leg).sort((a,b)=>
     (a.route_order??1e6)-(b.route_order??1e6) || String(a.business_name).localeCompare(String(b.business_name)));
 }
 function renderRouteEditor(){
@@ -3118,7 +3115,7 @@ function renderDraftLines(){
       : `<div style="font-size:12px;color:var(--muted)">${fmtQty(l.species,left)} still left after this</div>`;
     return `<div class="order-item-row" style="display:block"><div style="display:flex;justify-content:space-between"><span>${esc(l.species)}</span><span class="mono">${fmtQty(l.species,l.qty_kg)} <button onclick="removeDraftLine(${i})" style="color:var(--danger);margin-left:8px;border:none;background:none">✕</button></span></div>${flag}</div>`;
   }).join("");
-  const feeLine = staffDraftOrder.length ? `<div class="order-item-row" style="color:var(--muted)"><span>${chef?.is_pickup?'Pickup, no delivery charge':`Delivery (${DELIVERY_ZONE_LABELS[chef?.delivery_zone]||DELIVERY_ZONE_LABELS.standard})`}</span><span class="mono">$${deliveryFeeFor(chef).toFixed(2)}</span></div>` : '';
+  const feeLine = staffDraftOrder.length ? `<div class="order-item-row" style="color:var(--muted)"><span>${chef?.is_pickup?'No delivery charge':`Delivery (${DELIVERY_ZONE_LABELS[chef?.delivery_zone]||DELIVERY_ZONE_LABELS.standard})`}</span><span class="mono">$${deliveryFeeFor(chef).toFixed(2)}</span></div>` : '';
   el.innerHTML = lines + feeLine;
   $("staffSubmitOrderBtn")?.classList.toggle("hidden", staffDraftOrder.length===0);
 }
@@ -3224,7 +3221,7 @@ function renderChefsView(){
           ${Object.entries(DELIVERY_ZONE_LABELS).map(([k,label])=>`<option value="${k}" ${c.delivery_zone===k?'selected':''}>${label}</option>`).join("")}
         </select>
         ${'is_hub' in c?`<label style="display:flex;align-items:center;gap:8px;margin-top:12px"><input id="edit_chef_hub" type="checkbox" style="width:auto" ${c.is_hub?'checked':''}> Food hub (can order hubs-only items like Retail Boxes)</label>`:''}
-        ${'is_pickup' in c?`<label style="display:flex;align-items:center;gap:8px;margin-top:8px"><input id="edit_chef_pickup" type="checkbox" style="width:auto" ${c.is_pickup?'checked':''}> Picks up (no delivery charge, not on the run sheet)</label>`:''}
+        ${'is_pickup' in c?`<label style="display:flex;align-items:center;gap:8px;margin-top:8px"><input id="edit_chef_pickup" type="checkbox" style="width:auto" ${c.is_pickup?'checked':''}> No delivery charge (picks up)</label>`:''}
         <div style="display:flex;gap:8px;margin-top:12px">
           <button class="btn btn-primary btn-sm" onclick="saveChefEdit('${c.id}')">Save</button>
           <button class="btn btn-ghost btn-sm" onclick="editingChefId=null;renderStaffApp();">Cancel</button>
@@ -3237,7 +3234,7 @@ function renderChefsView(){
           <div style="font-weight:700">${c.business_name}${c.is_hub?' <span class="pill good">Hub</span>':''}</div>
           <div style="font-size:12px;color:var(--muted)">${c.contact_name||''} ${c.email?'· '+c.email:''} ${c.phone?'· '+c.phone:''}</div>
           <div style="font-size:12px;margin-top:2px;${c.address?'color:var(--muted)':'color:var(--warn)'}">${c.address?esc(c.address):'No delivery address'}</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:2px">${c.is_pickup?'Picks up, no delivery charge':(DELIVERY_ZONE_LABELS[c.delivery_zone]||DELIVERY_ZONE_LABELS.standard)}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${c.is_pickup?'No delivery charge':(DELIVERY_ZONE_LABELS[c.delivery_zone]||DELIVERY_ZONE_LABELS.standard)}</div>
         </div>
         <span class="pill ${c.active?'good':'muted'}">${c.active?'active':'inactive'}</span>
       </div>
