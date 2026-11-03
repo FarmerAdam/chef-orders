@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
 <style>
 :root{
   /* Markwood brand tokens — sampled from BrandGuide.jpeg + memory canon */
@@ -137,13 +138,24 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .run-done{font-size:13px;font-weight:700;color:var(--good);margin-top:10px}
 .run-undo{font-size:12px;font-weight:600;color:var(--muted);text-decoration:underline;margin-left:8px;padding:8px 2px}
 .run-check{display:none}
-.route-row{display:flex;gap:12px;padding:14px 0;border-top:1px solid var(--cream)}
+.run-stop .drag-handle{margin:-4px -6px 0 0}
+.drag-handle{display:flex;align-items:center;justify-content:center;width:36px;height:44px;flex:none;color:var(--muted);cursor:grab;touch-action:none;border-radius:var(--radius-sm)}
+.drag-handle:hover{background:var(--cream);color:var(--brown)}
+.drag-handle svg{width:14px;height:22px;fill:currentColor}
+.drag-ghost{opacity:.35}
+.sortable-fallback{box-shadow:var(--shadow-lift) !important;opacity:1 !important;cursor:grabbing}
+.route-board{display:grid;grid-template-columns:1fr;gap:16px;align-items:start;margin-bottom:6px}
+@media (min-width:761px){ .route-board{grid-template-columns:1fr 1fr} }
+.route-col{padding:14px;min-width:0;background:var(--cream);box-shadow:none;border:1.5px solid var(--blush)}
+.route-list{min-height:90px;display:flex;flex-direction:column;gap:10px}
+.route-list:empty::before{content:"Drag customers here";display:flex;align-items:center;justify-content:center;height:90px;color:var(--muted);font-size:13px;border:1.5px dashed var(--blush);border-radius:var(--radius-sm)}
+.route-row{display:flex;gap:8px;padding:10px;background:#fff;border-radius:var(--radius-sm);box-shadow:var(--shadow)}
 .route-move{display:flex;flex-direction:column;align-items:center;gap:2px;flex:none}
-.route-move button{width:38px;height:34px;border:1.5px solid var(--blush);border-radius:var(--radius-sm);color:var(--maroon);font-weight:800}
+.route-move button{width:34px;height:30px;border:1.5px solid var(--blush);border-radius:var(--radius-sm);color:var(--maroon);font-weight:800}
 .route-move button:disabled{opacity:.3;cursor:default}
 .route-pos{font-weight:800;font-size:14px}
 .route-fields{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
-.route-fields input{padding:8px 10px;font-size:14px}
+.route-fields input,.route-fields select{padding:8px 10px;font-size:14px}
 .driver-row{padding:12px 0;border-top:1px solid var(--cream)}
 .driver-link{font-size:12px;color:var(--muted);overflow-wrap:anywhere;margin:2px 0 8px}
 @media print{
@@ -335,7 +347,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.67"; // pre-launch build; 1.0 = first real launch — Run sheet tab: each delivery day's stops in route order, what to load, tap to navigate/call/tick off, printable; private no-login link per driver that always opens the next run, no prices. 0.66: standing / one-off back to two independent columns, only the tops level (no gaps between standing cards). 0.65: standing cards back to their own size, still starting level with the one-off beside them. 0.64: Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
+const APP_VERSION = "0.68"; // pre-launch build; 1.0 = first real launch — Run sheet: drag tiles to change the route, and legs (Main Run / Bright Run), each with its own stops and load list. 0.67: Run sheet tab: each delivery day's stops in route order, what to load, tap to navigate/call/tick off, printable; private no-login link per driver that always opens the next run, no prices. 0.66: standing / one-off back to two independent columns, only the tops level (no gaps between standing cards). 0.65: standing cards back to their own size, still starting level with the one-off beside them. 0.64: Orders is the first tab, with a bold Ordered / Left kg readout for the next delivery week; "This week" renamed Details; standing and one-off cards line up row by row. 0.63: Standing orders tab merged into Orders: standing customers on the left (weekly order + its deliveries to tick off, edit/skip/pause/delete in place), one-off orders on the right; replacing a standing order deletes the old one instead of keeping it switched off. 0.62: "Set as standing order" also marks the order it was made from as standing, so it gets the pill too. 0.61: "↻ Standing" pill next to the customer on orders made from a standing order, so they stand out at a glance. 0.60: "Set as standing order" on order cards (copies the order, makes it the customer's active weekly order, skips that week to avoid a double). 0.59: Orders tab: only current/open orders shown, delivered/cancelled ones folded into "Past orders" by month. 0.58: wholesale cap: MAVIS forecast minus market reserve minus orders, This week/Next week screen, quick order logging from texts (any customer, Wed/Thu), overdue orders flagged, harvest/movement reads paged past 1000 rows
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -1792,7 +1804,7 @@ function renderStaffTab(){
   const el=$("staffTabContent");
   if(staffTab==="summary") el.innerHTML = renderSummaryView();
   else if(staffTab==="orders" || staffTab==="standing"){ el.innerHTML = renderOrdersView(); renderDraftLines(); }
-  else if(staffTab==="run") el.innerHTML = renderRunView();
+  else if(staffTab==="run"){ el.innerHTML = renderRunView(); initRunDrag(); }
   else if(staffTab==="market") el.innerHTML = renderMarketView();
   else if(staffTab==="chefs") el.innerHTML = renderChefsView();
   else if(staffTab==="prices") el.innerHTML = renderPricesView();
@@ -1928,15 +1940,41 @@ function forecastAgeNote(cap){
    go through mn_run_sheet / mn_run_set_delivered and never see prices.
 
    Several orders for one customer on one day become one stop. */
-let drivers=[], runReady=true, runDate=null, routeEditing=false;
-let driverRun=null, driverDate=null, driverOffline=null, driverDead=false, driverRunAt=null;
+let drivers=[], runReady=true, runDate=null, runLeg=null, routeEditing=false;
+let driverRun=null, driverDate=null, driverLeg=null, driverOffline=null, driverDead=false, driverRunAt=null;
+
+/* Legs (2026-11-03): a delivery day can split into separate trips, each with
+   its own stops, load list and printout. A customer belongs to one leg
+   (mn_chefs.route_leg, unset = the first leg). To add a leg, add it here. */
+const RUN_LEGS=[{key:'main',label:'Main Run'},{key:'bright',label:'Bright Run'}];
+function legKey(v){ return RUN_LEGS.some(l=>l.key===v) ? v : RUN_LEGS[0].key; }
+function legLabel(k){ return RUN_LEGS.find(l=>l.key===k)?.label||''; }
+function stopsOnLeg(stops,k){ return stops.filter(x=>legKey(x.route_leg)===k); }
+// The leg to show: the one asked for if it has stops today, otherwise the
+// first with something still to deliver.
+function pickLeg(stops,wanted){
+  if(wanted && stopsOnLeg(stops,wanted).length) return wanted;
+  const leg=RUN_LEGS.find(l=>stopsOnLeg(stops,l.key).some(x=>!x.delivered)) || RUN_LEGS.find(l=>stopsOnLeg(stops,l.key).length);
+  return (leg||RUN_LEGS[0]).key;
+}
+function renderLegChips(stops,selected,handler){
+  const legs=RUN_LEGS.filter(l=>stopsOnLeg(stops,l.key).length);
+  if(legs.length<2) return '';
+  return `<div class="run-days no-print">${legs.map(l=>`<button class="run-day ${l.key===selected?'active':''}" onclick="${handler}('${l.key}')">${l.label} · ${stopsOnLeg(stops,l.key).length}</button>`).join('')}</div>`;
+}
+// The "Bright Run · " in front of the stop count. Left off a day that's only
+// the Main Run, which needs no explaining.
+function legHeading(stops,leg){
+  return stopsOnLeg(stops,leg).length<stops.length || leg!==RUN_LEGS[0].key ? legLabel(leg)+' · ' : '';
+}
+const DRAG_DOTS='<svg viewBox="0 0 14 22" aria-hidden="true"><circle cx="3" cy="3" r="2"/><circle cx="11" cy="3" r="2"/><circle cx="3" cy="11" r="2"/><circle cx="11" cy="11" r="2"/><circle cx="3" cy="19" r="2"/><circle cx="11" cy="19" r="2"/></svg>';
 
 function groupRunStops(orders){
   const byChef=new Map();
   for(const o of orders){
     if(!byChef.has(o.chef_id)) byChef.set(o.chef_id,{
       chef_id:o.chef_id, business_name:o.business_name, contact_name:o.contact_name, phone:o.phone,
-      address:o.address, delivery_notes:o.delivery_notes, route_order:o.route_order,
+      address:o.address, delivery_notes:o.delivery_notes, route_order:o.route_order, route_leg:o.route_leg,
       order_ids:[], items:[], notes:[], delivered:true, unconfirmed:false, delivered_at:null, delivered_by:null });
     const st=byChef.get(o.chef_id);
     st.order_ids.push(o.id);
@@ -1961,10 +1999,10 @@ function runMapsLink(st){
 function runTelLink(phone){ return 'tel:'+String(phone).replace(/[^\d+]/g,''); }
 function runTime(iso){ return new Date(iso).toLocaleTimeString('en-AU',{hour:'numeric',minute:'2-digit'}); }
 
-function renderRunStop(st, n, isNext, canTick){
+function renderRunStop(st, n, isNext, canTick, draggable){
   const contact=[st.contact_name?esc(st.contact_name):'', st.phone?`<a href="${runTelLink(st.phone)}">${esc(st.phone)}</a>`:''].filter(Boolean).join(' · ');
   const ids=st.order_ids.join(',');
-  return `<div class="card run-stop ${st.delivered?'done':''} ${isNext?'next':''}">
+  return `<div class="card run-stop ${st.delivered?'done':''} ${isNext?'next':''}" data-chef="${st.chef_id}">
     <div class="run-num">${st.delivered?'✓':n}</div>
     <div class="run-body">
       <div class="run-name">${esc(st.business_name)}${st.unconfirmed?' <span class="pill warn">Not confirmed yet</span>':''}</div>
@@ -1981,11 +2019,12 @@ function renderRunStop(st, n, isNext, canTick){
             ${canTick?`<button class="btn btn-primary" onclick="runTick('${ids}',true)">Delivered</button>`:''}
           </div>`}
     </div>
+    ${draggable?`<div class="drag-handle no-print" title="Drag to change the stop order" aria-label="Drag to move ${escAttr(st.business_name)}">${DRAG_DOTS}</div>`:''}
     <div class="run-check"></div>
   </div>`;
 }
 /* The shared body: what to load, then the stops. `tools` is staff-only. */
-function renderRunBody(date, today, stops, tools){
+function renderRunBody(date, today, stops, tools, heading, draggable){
   const load={};
   for(const st of stops) for(const i of st.items) load[i.species]=(load[i.species]||0)+Number(i.qty_kg);
   const total=Object.values(load).reduce((a,b)=>a+b,0);
@@ -1995,7 +2034,7 @@ function renderRunBody(date, today, stops, tools){
   return `<div class="run-head">
       <div>
         <h2>${fmtDayDate(date,{weekday:'long',day:'numeric',month:'long'})}</h2>
-        <div class="run-sub">${stops.length} stop${stops.length===1?'':'s'} · ${fmtKg(total)}kg${done?` · ${done} of ${stops.length} delivered`:''}</div>
+        <div class="run-sub">${heading||''}${stops.length} stop${stops.length===1?'':'s'} · ${fmtKg(total)}kg${done?` · ${done} of ${stops.length} delivered`:''}</div>
       </div>
       ${tools||''}
     </div>
@@ -2004,7 +2043,7 @@ function renderRunBody(date, today, stops, tools){
       <div class="section-title" style="margin-bottom:6px">Load</div>
       ${Object.entries(load).sort((a,b)=>b[1]-a[1]).map(([sp,kg])=>`<div class="run-load-row"><span>${esc(sp)}</span><span class="mono">${fmtKg(kg)}kg</span></div>`).join('')}
     </div>
-    ${stops.map((st,i)=>renderRunStop(st,i+1,i===nextIdx,canTick)).join('')}`;
+    <div id="runStopList">${stops.map((st,i)=>renderRunStop(st,i+1,i===nextIdx,canTick,draggable)).join('')}</div>`;
 }
 
 /* ----- staff tab ----- */
@@ -2020,7 +2059,7 @@ function staffRunOrders(date){
   return allOrders.filter(o=>o.requested_date===date && o.status!=='cancelled').map(o=>{
     const c=chefs.find(x=>x.id===o.chef_id)||{};
     return {...o, business_name:c.business_name||o.mn_chefs?.business_name||'Unknown', contact_name:c.contact_name, phone:c.phone,
-      address:c.address, delivery_notes:c.delivery_notes, route_order:c.route_order, items:o.mn_order_items||[]};
+      address:c.address, delivery_notes:c.delivery_notes, route_order:c.route_order, route_leg:c.route_leg, items:o.mn_order_items||[]};
   });
 }
 function renderRunDays(days, selected, handler){
@@ -2033,55 +2072,125 @@ function renderRunView(){
   if(!days.some(d=>d.date===runDate)) runDate=days[0]?.date||null;
   const tools=`<div class="run-tools no-print">
       <button class="btn btn-ghost btn-sm" onclick="window.print()">Print</button>
-      <button class="btn btn-ghost btn-sm" onclick="routeEditing=!routeEditing;renderStaffTab()">${routeEditing?'Done':'Edit route'}</button>
+      <button class="btn btn-ghost btn-sm" onclick="routeEditing=true;renderStaffTab()">Edit route</button>
     </div>`;
   let body;
-  if(runDate){
-    const stops=groupRunStops(staffRunOrders(runDate));
-    const noAddr=stops.filter(x=>!x.address).length;
+  if(routeEditing){
+    body=`<div class="run-head"><h2>Edit route</h2><div class="run-tools"><button class="btn btn-primary btn-sm" style="margin:0" onclick="routeEditing=false;renderStaffTab()">Done</button></div></div>`+renderRouteEditor();
+  } else if(runDate){
+    const all=groupRunStops(staffRunOrders(runDate));
+    runLeg=pickLeg(all,runLeg);
+    const stops=stopsOnLeg(all,runLeg);
+    const noAddr=all.filter(x=>!x.address).length;
     body=renderRunDays(days,runDate,'setRunDate')
-      +(routeEditing?renderRouteEditor():'')
-      +(!routeEditing&&noAddr?`<div class="card no-print" style="margin-bottom:14px;border:1.5px solid var(--warn);font-size:13px">${noAddr} stop${noAddr===1?' has':'s have'} no address. Navigate will search by business name until you add one under Edit route.</div>`:'')
-      +renderRunBody(runDate,todayISO(),stops,tools);
+      +renderLegChips(all,runLeg,'setRunLeg')
+      +(noAddr?`<div class="card no-print" style="margin-bottom:14px;border:1.5px solid var(--warn);font-size:13px">${noAddr} stop${noAddr===1?' has':'s have'} no address. Navigate will search by business name until you add one under Edit route.</div>`:'')
+      +renderRunBody(runDate,todayISO(),stops,tools,legHeading(all,runLeg),true);
   } else {
-    body=`<div class="run-head"><div class="run-sub">Nothing to deliver in the next two weeks.</div>${tools}</div>`+(routeEditing?renderRouteEditor():'');
+    body=`<div class="run-head"><div class="run-sub">Nothing to deliver in the next two weeks.</div>${tools}</div>`;
   }
   return body+renderDriversCard();
 }
 function setRunDate(d){ runDate=d; renderStaffTab(); }
-function routeChefs(){
-  return chefs.filter(c=>c.active).sort((a,b)=>
+function setRunLeg(k){ runLeg=k; renderStaffTab(); }
+function routeChefs(leg, includeInactive){
+  return chefs.filter(c=>(includeInactive||c.active) && legKey(c.route_leg)===leg).sort((a,b)=>
     (a.route_order??1e6)-(b.route_order??1e6) || String(a.business_name).localeCompare(String(b.business_name)));
 }
 function renderRouteEditor(){
-  const list=routeChefs();
-  return `<div class="card no-print" style="margin-bottom:14px">
-    <div class="section-title" style="margin-bottom:4px">Route order</div>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:6px">Stops always come out in this order, on every run. Customers with no order that day are left out.</p>
-    ${list.map((c,i)=>`<div class="route-row">
-      <div class="route-move">
-        <button aria-label="Move ${escAttr(c.business_name)} up" ${i===0?'disabled':''} onclick="moveRouteStop('${c.id}',-1)">↑</button>
-        <span class="route-pos">${i+1}</span>
-        <button aria-label="Move ${escAttr(c.business_name)} down" ${i===list.length-1?'disabled':''} onclick="moveRouteStop('${c.id}',1)">↓</button>
-      </div>
-      <div class="route-fields">
-        <div style="font-weight:700">${esc(c.business_name)}${c.delivery_zone==='remote_courier'?' <span class="pill muted">Wed</span>':''}</div>
-        <input aria-label="Address for ${escAttr(c.business_name)}" placeholder="Address" value="${escAttr(c.address)}" onchange="saveRouteField('${c.id}','address',this.value)">
-        <input aria-label="Delivery instructions for ${escAttr(c.business_name)}" placeholder="Delivery instructions (back door, key code…)" value="${escAttr(c.delivery_notes)}" onchange="saveRouteField('${c.id}','delivery_notes',this.value)">
-      </div>
-    </div>`).join('')}
+  const needsSetup = chefs.length && !('route_leg' in chefs[0]);
+  return `<div class="no-print">
+    ${needsSetup?`<div class="card" style="margin-bottom:14px;border:1.5px solid var(--warn);font-size:13px"><b>One setup step left.</b> Run <span class="mono">supabase/migrations/2026-11-03b_run_legs.sql</span> in the Supabase SQL editor before moving anyone onto another run.</div>`:''}
+    <p style="font-size:13px;color:var(--muted);margin-bottom:12px">Drag the dots to change the order or move a customer to another run. Stops always come out in this order, and customers with no order that day are left out.</p>
+    <div class="route-board">${RUN_LEGS.map(l=>{
+      const list=routeChefs(l.key);
+      return `<div class="card route-col">
+        <div class="section-title">${l.label} · ${list.length}</div>
+        <div class="route-list" data-leg="${l.key}">${list.map((c,i)=>renderRouteRow(c,i,list.length,l.key)).join('')}</div>
+      </div>`;
+    }).join('')}</div>
   </div>`;
 }
-async function moveRouteStop(id,dir){
-  const list=routeChefs(), i=list.findIndex(c=>c.id===id), j=i+dir;
-  if(i<0||j<0||j>=list.length) return;
-  [list[i],list[j]]=[list[j],list[i]];
-  const changed=[];
-  list.forEach((c,n)=>{ if(c.route_order!==n+1){ c.route_order=n+1; changed.push(c); } });
+function renderRouteRow(c,i,count,leg){
+  return `<div class="route-row" data-chef="${c.id}">
+    <div class="drag-handle" title="Drag to move" aria-label="Drag to move ${escAttr(c.business_name)}">${DRAG_DOTS}</div>
+    <div class="route-move">
+      <button aria-label="Move ${escAttr(c.business_name)} up" ${i===0?'disabled':''} onclick="moveRouteStop('${c.id}',-1)">↑</button>
+      <span class="route-pos">${i+1}</span>
+      <button aria-label="Move ${escAttr(c.business_name)} down" ${i===count-1?'disabled':''} onclick="moveRouteStop('${c.id}',1)">↓</button>
+    </div>
+    <div class="route-fields">
+      <div style="font-weight:700">${esc(c.business_name)}${c.delivery_zone==='remote_courier'?' <span class="pill muted">Wed</span>':''}</div>
+      <select aria-label="Run for ${escAttr(c.business_name)}" onchange="setRouteLeg('${c.id}',this.value)">${RUN_LEGS.map(l=>`<option value="${l.key}" ${l.key===leg?'selected':''}>${l.label}</option>`).join('')}</select>
+      <input aria-label="Address for ${escAttr(c.business_name)}" placeholder="Address" value="${escAttr(c.address)}" onchange="saveRouteField('${c.id}','address',this.value)">
+      <input aria-label="Delivery instructions for ${escAttr(c.business_name)}" placeholder="Delivery instructions (back door, key code…)" value="${escAttr(c.delivery_notes)}" onchange="saveRouteField('${c.id}','delivery_notes',this.value)">
+    </div>
+  </div>`;
+}
+/* Takes the new order of one or more legs ({leg:[chef ids]}), renumbers the
+   whole route and saves only the customers that changed. Inactive customers
+   aren't on screen, so they keep their place at the end of their leg. */
+async function saveRoute(lists){
+  const placed=new Set(Object.values(lists).flat());
+  const updates=[]; let n=0;
+  // Work out the rest of each leg before anything changes, then apply.
+  const finalLists=RUN_LEGS.map(l=>[l.key,[...(lists[l.key]||[]), ...routeChefs(l.key,true).map(c=>c.id).filter(id=>!placed.has(id))]]);
+  for(const [leg,ids] of finalLists){
+    for(const id of ids){
+      const c=chefs.find(x=>x.id===id); if(!c) continue;
+      n++;
+      const patch={};
+      if(c.route_order!==n) patch.route_order=n;
+      if(legKey(c.route_leg)!==leg) patch.route_leg=leg;
+      if(Object.keys(patch).length){ Object.assign(c,patch); updates.push([id,patch]); }
+    }
+  }
   renderStaffTab();
-  const res=await Promise.all(changed.map(c=>db.from("mn_chefs").update({route_order:c.route_order}).eq("id",c.id)));
+  const res=await Promise.all(updates.map(([id,patch])=>db.from("mn_chefs").update(patch).eq("id",id)));
   const bad=res.find(r=>r.error);
   if(bad){ toast("Couldn't save the route: "+bad.error.message); await loadStaffOnlyData(); renderStaffTab(); }
+}
+function moveRouteStop(id,dir){
+  const c=chefs.find(x=>x.id===id); if(!c) return;
+  const leg=legKey(c.route_leg), ids=routeChefs(leg).map(x=>x.id), i=ids.indexOf(id), j=i+dir;
+  if(i<0||j<0||j>=ids.length) return;
+  [ids[i],ids[j]]=[ids[j],ids[i]];
+  saveRoute({[leg]:ids});
+}
+function setRouteLeg(id,leg){
+  saveRoute({[leg]:[...routeChefs(leg).map(x=>x.id).filter(x=>x!==id), id]});
+}
+/* Tiles are dragged by their dots, so the page still scrolls normally and
+   the buttons and boxes on a tile still work. forceFallback gives mouse and
+   touch the same behaviour. If the library doesn't load, the arrows and run
+   dropdown under Edit route still do the job. */
+function initRunDrag(){
+  if(typeof Sortable==='undefined') return;
+  const opts={handle:'.drag-handle', animation:150, forceFallback:true, fallbackOnBody:true, ghostClass:'drag-ghost',
+              scroll:true, bubbleScroll:true, scrollSensitivity:80, scrollSpeed:14};
+  const moved=e=>!(e.from===e.to && e.oldDraggableIndex===e.newDraggableIndex);
+  const day=$("runStopList");
+  if(day) Sortable.create(day,{...opts, draggable:'.run-stop', onEnd:e=>{ if(moved(e)) setTimeout(()=>dropDayTile(e.item.dataset.chef)); }});
+  document.querySelectorAll('.route-list').forEach(el=>Sortable.create(el,{...opts, group:'route', draggable:'.route-row', onEnd:e=>{ if(moved(e)) setTimeout(dropBoardTile); }}));
+}
+function dropBoardTile(){
+  const lists={};
+  document.querySelectorAll('.route-list').forEach(el=>{ lists[el.dataset.leg]=[...el.querySelectorAll('.route-row')].map(r=>r.dataset.chef); });
+  saveRoute(lists);
+}
+/* A day's sheet only shows who ordered that day, but the route covers
+   everyone. So the dragged customer goes directly in front of whoever it was
+   dropped above (or behind the last one), and customers not on today's sheet
+   keep their places. */
+function dropDayTile(id){
+  const c=chefs.find(x=>x.id===id); if(!c) return;
+  const shown=[...$("runStopList").querySelectorAll('.run-stop')].map(e=>e.dataset.chef);
+  const pos=shown.indexOf(id), next=shown[pos+1], prev=shown[pos-1];
+  const leg=legKey(c.route_leg);
+  const ids=routeChefs(leg,true).map(x=>x.id).filter(x=>x!==id);
+  const at=next ? ids.indexOf(next) : ids.indexOf(prev)+1;
+  ids.splice(Math.max(at,0),0,id);
+  saveRoute({[leg]:ids});
 }
 async function saveRouteField(id,field,value){
   const clean=value.trim()||null;
@@ -2165,8 +2274,16 @@ function renderDriverApp(){
     el.innerHTML=offline+`<div class="card empty-state"><b>No deliveries coming up.</b><br>New runs show up here automatically.</div>`;
     return;
   }
+  const all=groupRunStops(driverRun.orders), leg=pickLeg(all,driverLeg);
   el.innerHTML=offline+renderRunDays(driverRun.dates,driverRun.date,'setDriverDate')
-    +renderRunBody(driverRun.date,driverRun.today,groupRunStops(driverRun.orders));
+    +renderLegChips(all,leg,'setDriverLeg')
+    +renderRunBody(driverRun.date,driverRun.today,stopsOnLeg(all,leg),'',legHeading(all,leg));
+}
+// Remembered on the phone, so whoever does the Bright Run only picks it once.
+function setDriverLeg(k){
+  driverLeg=k;
+  try{ localStorage.setItem(driverCacheKey()+'_leg',k); }catch(e){}
+  renderDriverApp(); window.scrollTo(0,0);
 }
 async function loadDriverRun(){
   const {data,error}=await db.rpc('mn_run_sheet',{p_token:driverToken, p_date:driverDate});
@@ -2197,6 +2314,7 @@ async function bootDriver(){
   document.querySelector(".appbar-actions button")?.classList.add("hidden"); // no sign out: there's no login
   // A link cut off in a text message can't be valid, so don't blame reception.
   if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(driverToken)){ driverDead=true; renderDriverApp(); return; }
+  try{ driverLeg=localStorage.getItem(driverCacheKey()+'_leg'); }catch(e){}
   $("mainContent").innerHTML=`<div class="spinner"></div>`;
   await loadDriverRun();
   // Stays right if it's left open: changes to the run come through, and
