@@ -213,6 +213,19 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .cart-total{display:flex;justify-content:space-between;font-weight:700;padding-top:14px;margin-top:6px;border-top:2px solid var(--cream)}
 .order-card-top{display:flex;align-items:center;justify-content:space-between}
 .order-item-row{display:flex;justify-content:space-between;font-size:13px;padding:4px 0;color:var(--muted)}
+.health-stats{display:flex;gap:24px;flex-wrap:wrap;margin-top:6px}
+.health-stats .num{font-size:22px;font-weight:700}
+.health-stats .lbl{font-size:12px;color:var(--muted)}
+.health-row{display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid var(--cream);flex-wrap:wrap}
+.health-row:last-child{border-bottom:none}
+.health-main{flex:1;min-width:190px}
+.health-why{font-size:12px;color:var(--muted);margin-top:3px}
+.health-bars{display:flex;align-items:flex-end;gap:2px;height:30px;flex:none}
+.health-bars span{width:7px;border-radius:2px 2px 0 0;background:var(--maroon);min-height:2px}
+.health-bars span.zero{background:var(--blush)}
+.health-bars span.now{opacity:.45}
+.health-money{text-align:right;flex:none;min-width:84px;margin-left:auto}
+@media (max-width:480px){ .health-main{flex-basis:100%} }
 @media (max-width:480px){
   .cart-row{flex-direction:column;align-items:stretch}
   .cart-row .cart-row-controls{margin-left:0;width:100%}
@@ -353,7 +366,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.73"; // pre-launch build; 1.0 = first real launch — Upcoming stops show a greyed-out Dropped button saying when it becomes available.
+const APP_VERSION = "0.74"; // pre-launch build; 1.0 = first real launch — Customer health tab: flags customers gone quiet, ordering less, or new without a standing order.
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -1923,6 +1936,7 @@ function renderStaffApp(){
       <button class="tab ${staffTab==='summary'?'active':''}" onclick="setStaffTab('summary')">Details</button>
       <button class="tab ${staffTab==='market'?'active':''}" onclick="setStaffTab('market')">Market</button>
       <button class="tab ${staffTab==='chefs'?'active':''}" onclick="setStaffTab('chefs')">Chefs ${chefRequests.length?`(${chefRequests.length})`:''}</button>
+      <button class="tab ${staffTab==='health'?'active':''}" onclick="setStaffTab('health')">Customer health ${healthAlertCount()?`(${healthAlertCount()})`:''}</button>
       <button class="tab ${staffTab==='prices'?'active':''}" onclick="setStaffTab('prices')">Prices</button>
       <button class="tab ${staffTab==='yields'?'active':''}" onclick="setStaffTab('yields')">Yield defaults</button>
     </div>
@@ -1940,6 +1954,7 @@ function renderStaffTab(){
   else if(staffTab==="run"){ el.innerHTML = renderRunView(); initRunDrag(); }
   else if(staffTab==="market") el.innerHTML = renderMarketView();
   else if(staffTab==="chefs") el.innerHTML = renderChefsView();
+  else if(staffTab==="health") el.innerHTML = renderHealthView();
   else if(staffTab==="prices") el.innerHTML = renderPricesView();
   else if(staffTab==="yields") el.innerHTML = renderYieldsView();
 }
@@ -2906,6 +2921,102 @@ async function deleteMarketRun(id){
   await db.from("mn_market_runs").delete().eq("id",id);
   await loadStaffOnlyData();
   renderStaffApp();
+}
+
+/* ----- CUSTOMER HEALTH (2026-11-03) -----
+   Em's January pay rise depends on wholesale holding up through February,
+   after the summer trade - new accounts only help if they stick. This
+   flags a customer going quiet or ordering less while there's still time
+   to ring them, rather than weeks later when it shows up in Xero.
+
+   Rolling 28-day windows rather than calendar weeks, so the current
+   half-done week never drags the numbers down: "recent" = the last 28 days
+   of orders due up to today, compared with the 8 weeks before that. Only
+   counts orders entered here - texted orders need logging too. */
+const HEALTH_QUIET_DAYS = 14, HEALTH_DROP = 0.7, HEALTH_GROW = 1.15, HEALTH_BIG_SHARE = 0.15;
+function orderValue(o){
+  return (o.mn_order_items||[]).reduce((s,i)=> s + (i.unit_price_per_kg ? i.unit_price_per_kg*i.qty_kg : 0), 0) + Number(o.delivery_fee||0);
+}
+function daysBetweenISO(a, b){ return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/864e5); }
+function computeCustomerHealth(){
+  const today = todayISO(), recentFrom = addDaysISO(today, -28), priorFrom = addDaysISO(today, -84);
+  const thisWeek = weekStartISO(today);
+  const weeks = Array.from({length:12}, (_, k)=> addDaysISO(thisWeek, -7*(11-k)));
+  const rows = chefs.filter(c=> c.active!==false).map(c=>{
+    const mine = allOrders.filter(o=> o.chef_id===c.id && o.status!=='cancelled');
+    const past = mine.filter(o=> o.requested_date<=today);
+    const next = mine.filter(o=> o.requested_date>today).map(o=>o.requested_date).sort()[0] || null;
+    const first = past.map(o=>o.requested_date).sort()[0] || null;
+    const last = past.map(o=>o.requested_date).sort().pop() || null;
+    let recent = 0, prior = 0;
+    const byWeek = weeks.map(()=>0);
+    for(const o of past){
+      const v = orderValue(o);
+      if(o.requested_date>recentFrom) recent += v;
+      else if(o.requested_date>priorFrom) prior += v;
+      const w = weeks.indexOf(weekStartISO(o.requested_date));
+      if(w>=0) byWeek[w] += v;
+    }
+    // weeks of the prior window they were actually a customer for, so a
+    // customer who started 5 weeks ago isn't compared against empty weeks
+    const priorDays = first && first<=recentFrom ? daysBetweenISO(first>priorFrom ? first : priorFrom, recentFrom) : 0;
+    const priorWeekly = priorDays>=14 ? prior/(priorDays/7) : null;
+    // a customer who started a fortnight ago is averaged over their 2 weeks, not 4
+    const weeksIn = first ? Math.min(4, Math.max(1, Math.ceil((daysBetweenISO(first, today)+1)/7))) : 4;
+    const recentWeekly = recent/weeksIn;
+    const standing = allStandingOrders.find(s=> s.chef_id===c.id && s.active) || null;
+    const quietDays = last ? daysBetweenISO(last, today) : null;
+    let status, tone, why;
+    if(!first && !next){ status='No orders yet'; tone='muted'; why='Nothing logged here yet'; }
+    else if(!next && quietDays>=HEALTH_QUIET_DAYS){ status='Gone quiet'; tone='danger'; why=`Last order ${quietDays} days ago, nothing booked`; }
+    else if(!first || first>recentFrom){ status='New'; tone=standing?'good':'warn'; why = standing ? 'New customer, on a standing order' : 'New - set up a standing order so they stick'; }
+    else if(priorWeekly && recentWeekly < priorWeekly*HEALTH_DROP){ status='Ordering less'; tone='warn'; why=`Down ${Math.round((1-recentWeekly/priorWeekly)*100)}% on the 8 weeks before`; }
+    else if(priorWeekly && recentWeekly > priorWeekly*HEALTH_GROW){ status='Growing'; tone='good'; why=`Up ${Math.round((recentWeekly/priorWeekly-1)*100)}% on the 8 weeks before`; }
+    else { status='Steady'; tone='good'; why = standing ? 'On a standing order' : 'No standing order yet'; }
+    if(standing && next && standing.skip_date===next) why += ' · skipping their next delivery';
+    return { c, status, tone, why, recent, recentWeekly, byWeek, next, last, standing };
+  });
+  const total = rows.reduce((s,r)=> s+r.recent, 0);
+  for(const r of rows) r.share = total ? r.recent/total : 0;
+  const rank = {danger:0, warn:1, good:2, muted:3};
+  rows.sort((a,b)=> rank[a.tone]-rank[b.tone] || b.recent-a.recent);
+  return { rows, total };
+}
+function healthAlertCount(){
+  try { return computeCustomerHealth().rows.filter(r=> r.tone==='danger' || r.tone==='warn').length; } catch(e){ return 0; }
+}
+function renderHealthView(){
+  const { rows, total } = computeCustomerHealth();
+  const count = t => rows.filter(r=> r.tone===t).length;
+  const fmt$ = v => '$'+Math.round(v).toLocaleString('en-AU');
+  const shortDate = iso => new Date(iso+'T00:00:00').toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short'});
+  const summary = `
+    <div class="card" style="margin-bottom:18px">
+      <div class="section-title">Wholesale, last 4 weeks</div>
+      <div class="health-stats">
+        <div><div class="mono num">${fmt$(total/4)}</div><div class="lbl">a week on average</div></div>
+        <div><div class="mono num" style="color:var(--danger)">${count('danger')}</div><div class="lbl">gone quiet</div></div>
+        <div><div class="mono num" style="color:var(--warn)">${count('warn')}</div><div class="lbl">ordering less, or new without a standing order</div></div>
+        <div><div class="mono num" style="color:var(--good)">${count('good')}</div><div class="lbl">steady, growing or settled in</div></div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:10px">Only counts orders entered in Chef Orders - log texted orders here too, or this undercounts. Bars show each customer's last 12 weeks (this week lighter, still going).</div>
+    </div>`;
+  const list = rows.length ? rows.map(r=>{
+    const max = Math.max(...r.byWeek, 1);
+    const bars = r.byWeek.map((v,i)=> `<span class="${v?'':'zero'} ${i===r.byWeek.length-1?'now':''}" style="height:${v?Math.max(8, v/max*100):6}%" title="${fmt$(v)}"></span>`).join('');
+    const big = r.share>=HEALTH_BIG_SHARE ? ` · <b>${Math.round(r.share*100)}% of wholesale</b>` : '';
+    const when = r.next ? `Next: ${shortDate(r.next)}` : r.last ? `Last: ${shortDate(r.last)}` : '';
+    const call = (r.tone==='danger' || r.status==='Ordering less') && r.c.phone ? ` <a class="btn btn-ghost btn-sm" href="tel:${esc(r.c.phone)}">Call</a>` : '';
+    return `<div class="health-row">
+      <div class="health-main">
+        <div style="font-weight:700">${esc(r.c.business_name)} <span class="pill ${r.tone}" style="font-size:11px;padding:2px 8px;margin-left:4px">${r.status}</span>${call}</div>
+        <div class="health-why">${esc(r.why)}${big}${when?' · '+when:''}</div>
+      </div>
+      <div class="health-bars" aria-hidden="true">${bars}</div>
+      <div class="health-money"><div class="mono" style="font-weight:700">${fmt$(r.recentWeekly)}</div><div style="font-size:11px;color:var(--muted)">a week</div></div>
+    </div>`;
+  }).join('') : `<div class="empty-state">No active customers yet.</div>`;
+  return summary + `<div class="card">${list}</div>`;
 }
 
 /* ----- ORDERS (staff manage all, log on chef's behalf) ----- */
