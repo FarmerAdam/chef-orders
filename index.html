@@ -366,7 +366,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.76"; // pre-launch build; 1.0 = first real launch — Orders readout: Ordered and Left line up again now Ordered has the ≈ $ line under it.
+const APP_VERSION = "0.77"; // pre-launch build; 1.0 = first real launch — Week's ≈ $ value is a traffic-light pill: red under $2k, amber $2-3k, green $3k+.
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -3172,6 +3172,13 @@ function weekOrderValue(ws){
   }
   return total;
 }
+// Adam's traffic light for the week's wholesale (2026-11-03): red under $2k,
+// amber $2-3k, green from $3k.
+const WEEK_VALUE_AMBER = 2000, WEEK_VALUE_GREEN = 3000;
+function weekValuePill(v){
+  const tone = v>=WEEK_VALUE_GREEN ? 'good' : v>=WEEK_VALUE_AMBER ? 'warn' : 'danger';
+  return `<span class="pill ${tone} mono" style="margin-top:6px" title="Red under $2k, amber $2-3k, green $3k+">≈ $${Math.round(v).toLocaleString('en-AU')}</span>`;
+}
 function renderOrdersReadout(){
   const next = upcomingDeliveryDates(1)[0];
   if(!next) return '';
@@ -3185,7 +3192,7 @@ function renderOrdersReadout(){
   const over = cap ? cap.rows.reduce((t,r)=>t+Math.max(0,-r.left),0) + Object.values(cap.bundles).reduce((t,b)=>t+b.over,0) : 0;
   const weekLabel = `${fmtDayDate(ws,{day:'numeric',month:'short'})} – ${fmtDayDate(addDaysISO(ws,6),{day:'numeric',month:'short'})}`;
   return `<div class="card orders-readout">
-    <div><div class="num">${fmtKg(ordered)}kg</div><div class="lbl">Ordered${perBox.length?` · incl. ${qtyTotalLabel(perBox)}`:''}</div><div class="mono" style="font-size:13px;color:var(--muted);margin-top:2px">≈ $${Math.round(weekOrderValue(ws)).toLocaleString('en-AU')}</div></div>
+    <div><div class="num">${fmtKg(ordered)}kg</div><div class="lbl">Ordered${perBox.length?` · incl. ${qtyTotalLabel(perBox)}`:''}</div>${weekValuePill(weekOrderValue(ws))}</div>
     <div><div class="num" style="color:${!cap?'var(--muted)':cap.totalLeft<1?'var(--danger)':'var(--good)'}">${cap?fmtKg(cap.totalLeft)+'kg':'—'}</div><div class="lbl">Left${over>0.05?` · <span style="color:var(--danger)">${fmtKg(over)}kg over</span>`:''}</div></div>
     <div style="margin-left:auto;font-size:12px;color:var(--muted);align-self:center">Week of ${weekLabel}${cap?'':' · no MAVIS forecast yet'}</div>
   </div>`;
