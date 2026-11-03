@@ -136,6 +136,7 @@ main{flex:1;max-width:1100px;width:100%;margin:0 auto;padding:24px 20px 60px}
 .run-small{padding:6px 14px;min-height:36px;font-size:13px;margin:0;text-decoration:none}
 .run-drop{flex:1 1 100%;min-height:60px;padding:14px 24px;border-radius:999px;background:var(--maroon);color:#fff;font-family:"Montserrat",sans-serif;font-size:20px;font-weight:800;letter-spacing:.3px;box-shadow:var(--shadow);transition:transform .08s ease}
 .run-drop:active{transform:scale(.98)}
+.run-drop:disabled{background:var(--cream);color:var(--muted);box-shadow:none;font-size:15px;font-weight:700;cursor:not-allowed;transform:none}
 .run-done-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
 .run-done{flex:1 1 auto;min-height:48px;display:flex;align-items:center;justify-content:center;text-align:center;padding:8px 20px;border-radius:999px;background:var(--good);color:#fff;font-family:"Montserrat",sans-serif;font-size:16px;font-weight:800}
 .run-undo{font-size:13px;font-weight:600;color:var(--muted);text-decoration:underline;padding:8px 4px;flex:none}
@@ -352,7 +353,7 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     detectSessionInUrl: true
   }
 });
-const APP_VERSION = "0.72"; // pre-launch build; 1.0 = first real launch — Customers with no delivery charge are back on the run sheet as normal stops.
+const APP_VERSION = "0.73"; // pre-launch build; 1.0 = first real launch — Upcoming stops show a greyed-out Dropped button saying when it becomes available.
 
 const $ = id => document.getElementById(id);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
@@ -2138,7 +2139,12 @@ function runMapsLink(st){
 function runTelLink(phone){ return 'tel:'+String(phone).replace(/[^\d+]/g,''); }
 function runTime(iso){ return new Date(iso).toLocaleTimeString('en-AU',{hour:'numeric',minute:'2-digit'}); }
 
-function renderRunStop(st, n, isNext, canTick, draggable){
+// Upcoming stops can't be ticked yet: says when, by weekday if it's this coming week.
+function runAvailableOn(date, today){
+  const soon = date <= addDaysISO(today, 6);
+  return fmtDayDate(date, soon ? {weekday:'long'} : {weekday:'short',day:'numeric',month:'short'});
+}
+function renderRunStop(st, n, isNext, canTick, draggable, date, today){
   const contact=[st.contact_name?esc(st.contact_name):'', st.phone?`<a href="${runTelLink(st.phone)}">${esc(st.phone)}</a>`:''].filter(Boolean).join(' · ');
   const ids=st.order_ids.join(',');
   return `<div class="card run-stop ${st.delivered?'done':''} ${isNext?'next':''}" data-chef="${st.chef_id}">
@@ -2158,7 +2164,7 @@ function renderRunStop(st, n, isNext, canTick, draggable){
         : `<div class="run-actions no-print">
             <a class="btn btn-ghost run-small" href="${runMapsLink(st)}" target="_blank" rel="noopener">Navigate</a>
             ${st.phone?`<a class="btn btn-ghost run-small" href="${runTelLink(st.phone)}">Call</a>`:''}
-            ${canTick?`<button class="run-drop" onclick="runTick('${ids}',true)">Dropped</button>`:''}
+            ${canTick?`<button class="run-drop" onclick="runTick('${ids}',true)">Dropped</button>`:`<button class="run-drop" disabled>Dropped · Available ${runAvailableOn(date,today)}</button>`}
           </div>`}
     </div>
     ${draggable?`<div class="drag-handle no-print" title="Drag to change the stop order" aria-label="Drag to move ${escAttr(st.business_name)}">${DRAG_DOTS}</div>`:''}
@@ -2188,7 +2194,7 @@ function renderRunBody(date, today, stops, tools, heading, draggable){
       <div class="section-title" style="margin-bottom:6px">Load</div>
       ${loadItems.sort((a,b)=>b.qty_kg-a.qty_kg).map(l=>`<div class="run-load-row"><span>${esc(l.species)}</span><span class="mono">${fmtQty(l.species,l.qty_kg,l.unit)}</span></div>`).join('')}
     </div>
-    <div id="runStopList">${stops.map((st,i)=>renderRunStop(st,i+1,i===nextIdx,canTick,draggable)).join('')}</div>`;
+    <div id="runStopList">${stops.map((st,i)=>renderRunStop(st,i+1,i===nextIdx,canTick,draggable,date,today)).join('')}</div>`;
 }
 
 /* ----- staff tab ----- */
